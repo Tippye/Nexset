@@ -1,18 +1,38 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { useEffect, useState } from 'react';
+import { useColorScheme, View } from 'react-native';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
+import { initDatabase } from '@/db/client';
+import { useAppStore } from '@/store/app-store';
 
 SplashScreen.preventAutoHideAsync();
 
-export default function TabLayout() {
+export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const [dbReady, setDbReady] = useState(false);
+  const hydrate = useAppStore((s) => s.hydrate);
+  const hydrated = useAppStore((s) => s.hydrated);
+
+  useEffect(() => {
+    initDatabase()
+      .then(() => hydrate())
+      .then(() => setDbReady(true))
+      .finally(() => SplashScreen.hideAsync());
+  }, [hydrate]);
+
+  if (!dbReady || !hydrated) {
+    return <View />;
+  }
+
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="workout/[sessionId]" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="settings/ai" />
+      </Stack>
     </ThemeProvider>
   );
 }
