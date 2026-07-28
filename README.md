@@ -4,6 +4,14 @@ Nexset 是一个本地优先的 Expo / React Native 健身计划与训练记录�
 
 > 项目处于早期开发阶段。核心流程已有自动化测试，Apple Watch、HealthKit、Widget、Live Activity 等原生能力仍需要开发构建和真机验证。Nexset 不提供医疗诊断。
 
+## 产品预览
+
+| 今日训练 | AI 教练 | 动作库 |
+| :---: | :---: | :---: |
+| <img src="docs/images/screenshots/today.png" width="260" alt="Nexset 今日训练与营养概览" /> | <img src="docs/images/screenshots/ai-coach.png" width="260" alt="Nexset 自定义 AI 教练与计划生成" /> | <img src="docs/images/screenshots/exercise-library.png" width="260" alt="Nexset 本地动作库与筛选" /> |
+
+<p align="center"><sub>截图来自 iOS Simulator；界面可能随项目迭代调整。</sub></p>
+
 ## 功能概览
 
 - 引导问卷、本地安全模板计划，以及能够按需追问的 AI 计划生成。
