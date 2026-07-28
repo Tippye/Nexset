@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Redirect, router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { DailyAdjustmentCard } from '@/components/daily-adjustment-card';
 import {
@@ -21,11 +21,21 @@ import { getCardioByDate } from '@/db/repositories/cardio-repo';
 import { getExercisesByIds } from '@/db/repositories/exercise-repo';
 import type { PlanDayDetail } from '@/db/repositories/plan-repo';
 import { getSessionsByDate } from '@/db/repositories/workout-repo';
+import { getSetting, setSetting } from '@/db/repositories/settings-repo';
 import { useTheme } from '@/hooks/use-theme';
+import {
+  DEFAULT_HOME_PROMPT_DISMISSALS,
+  getHomePromptVisibility,
+  type HomePromptDismissals,
+} from '@/lib/home-prompts';
 import { localDate } from '@/lib/id';
 import { proteinFoodExample } from '@/lib/nutrition';
+import { loadApplePreferences } from '@/platform/apple/preferences';
 import { useAppStore } from '@/store/app-store';
 import { useWorkoutStore } from '@/store/workout-store';
+import { isWebDavConfigured, loadWebDavConfig } from '@/sync/webdav-config';
+
+const HOME_PROMPT_SETTINGS_KEY = 'home_prompt_dismissals';
 
 /** JS getDay(): 0=Sun..6=Sat → plan dayOfWeek 1=Mon..7=Sun */
 function todayDayOfWeek(): number {
@@ -37,10 +47,15 @@ const DAY_NAMES = ['一', '二', '三', '四', '五', '六', '日'];
 
 export default function TodayScreen() {
   const theme = useTheme();
-  const { onboardingDone, activePlan, profile } = useAppStore();
+  const { activePlan, profile } = useAppStore();
   const [exNames, setExNames] = useState<Map<string, string>>(new Map());
   const [doneToday, setDoneToday] = useState(false);
   const [todayActivity, setTodayActivity] = useState({ strength: 0, cardioMin: 0 });
+  const [promptState, setPromptState] = useState<{
+    healthEnabled: boolean;
+    webdavConfigured: boolean;
+    dismissals: HomePromptDismissals;
+  } | null>(null);
   const [starting, setStarting] = useState(false);
   const startFromPlanDay = useWorkoutStore((s) => s.startFromPlanDay);
   const startEmpty = useWorkoutStore((s) => s.startEmpty);
@@ -58,9 +73,12 @@ export default function TodayScreen() {
           const m = await getExercisesByIds(db, todayPlanDay.exercises.map((e) => e.exerciseId));
           if (alive) setExNames(new Map([...m].map(([id, e]) => [id, e.nameZh])));
         }
-        const [sessions, cardio] = await Promise.all([
+        const [sessions, cardio, applePreferences, webdavConfig, dismissals] = await Promise.all([
           getSessionsByDate(db, localDate()),
           getCardioByDate(db, localDate()),
+          loadApplePreferences(),
+          loadWebDavConfig(),
+          getSetting<Partial<HomePromptDismissals>>(db, HOME_PROMPT_SETTINGS_KEY),
         ]);
         if (alive) {
           const completedStrength = sessions.filter((session) => session.endedAt != null).length;
@@ -69,6 +87,11 @@ export default function TodayScreen() {
             strength: completedStrength,
             cardioMin: Math.round(cardio.reduce((sum, row) => sum + row.durationMin, 0)),
           });
+          setPromptState({
+            healthEnabled: applePreferences.healthEnabled,
+            webdavConfigured: isWebDavConfigured(webdavConfig),
+            dismissals: { ...DEFAULT_HOME_PROMPT_DISMISSALS, ...dismissals },
+          });
         }
       })();
       return () => {
@@ -76,10 +99,6 @@ export default function TodayScreen() {
       };
     }, [todayPlanDay]),
   );
-
-  if (!onboardingDone) {
-    return <Redirect href="/onboarding" />;
-  }
 
   async function handleStart() {
     setStarting(true);
@@ -97,6 +116,24 @@ export default function TodayScreen() {
   const nutrition = activePlan?.nutrition;
   const plannedExercises = todayPlanDay?.exercises.length ?? 0;
   const sessionMinutes = profile?.sessionMinutes ?? 60;
+  const promptVisibility = promptState
+    ? getHomePromptVisibility({ platform: Platform.OS, ...promptState })
+    : { health: false, webdav: false };
+
+  async function dismissPrompt(prompt: keyof HomePromptDismissals) {
+    if (!promptState) return;
+    const previous = promptState;
+    const next = {
+      ...promptState,
+      dismissals: { ...promptState.dismissals, [prompt]: true },
+    };
+    setPromptState(next);
+    try {
+      await setSetting(getDb(), HOME_PROMPT_SETTINGS_KEY, next.dismissals);
+    } catch {
+      setPromptState(previous);
+    }
+  }
 
   return (
     <ScreenContainer>
@@ -112,6 +149,28 @@ export default function TodayScreen() {
           />
         }
       />
+
+      {promptVisibility.health ? (
+        <SetupPromptCard
+          icon="heart-outline"
+          title="授权健康 App"
+          detail="授权后可同步体重、体脂、心率和训练记录，并把完成的力量训练写回健康。"
+          actionLabel="去授权"
+          onPress={() => router.push('/settings/apple' as never)}
+          onDismiss={() => void dismissPrompt('health')}
+        />
+      ) : null}
+
+      {promptVisibility.webdav ? (
+        <SetupPromptCard
+          icon="cloud-outline"
+          title="连接 WebDAV 同步"
+          detail="连接你自己的加密 WebDAV 目录，配置成功后此提示将自动隐藏。"
+          actionLabel="去连接"
+          onPress={() => router.push('/settings/webdav' as never)}
+          onDismiss={() => void dismissPrompt('webdav')}
+        />
+      ) : null}
 
       {profile?.incomplete && (
         <Card style={[styles.notice, { borderColor: `${theme.warning}55` }]}>
@@ -318,6 +377,50 @@ export default function TodayScreen() {
   );
 }
 
+function SetupPromptCard({
+  icon,
+  title,
+  detail,
+  actionLabel,
+  onPress,
+  onDismiss,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  detail: string;
+  actionLabel: string;
+  onPress: () => void;
+  onDismiss: () => void;
+}) {
+  const theme = useTheme();
+  return (
+    <Card style={[styles.setupCard, { borderColor: `${theme.chart1}42` }]}>
+      <Row style={styles.setupHeader}>
+        <View style={[styles.setupIcon, { backgroundColor: `${theme.chart1}18` }]}>
+          <Ionicons name={icon} size={22} color={theme.chart1} />
+        </View>
+        <View style={styles.flex}>
+          <ThemedText type="smallBold">{title}</ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.setupDetail}>
+            {detail}
+          </ThemedText>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`关闭${title}提示`}
+          hitSlop={10}
+          onPress={onDismiss}
+          style={styles.setupClose}>
+          <Ionicons name="close" size={19} color={theme.mutedForeground} />
+        </Pressable>
+      </Row>
+      <Button compact onPress={onPress} style={styles.setupButton}>
+        {actionLabel}
+      </Button>
+    </Card>
+  );
+}
+
 function MacroRow({
   label,
   value,
@@ -344,6 +447,23 @@ function MacroRow({
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  setupCard: { padding: Spacing.three },
+  setupHeader: { alignItems: 'flex-start' },
+  setupIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  setupDetail: { marginTop: Spacing.half, lineHeight: 19 },
+  setupClose: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  setupButton: { alignSelf: 'flex-start', marginTop: Spacing.twoHalf },
   notice: { paddingVertical: Spacing.twoHalf },
   heroCard: { padding: Spacing.threeHalf },
   heroHeader: { alignItems: 'center' },

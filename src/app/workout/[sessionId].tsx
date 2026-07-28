@@ -12,13 +12,8 @@ import { Spacing } from '@/constants/theme';
 import { getDb } from '@/db/client';
 import { listExercises, type Exercise } from '@/db/repositories/exercise-repo';
 import { useTheme } from '@/hooks/use-theme';
+import { playWorkoutHaptic } from '@/platform/apple/feedback';
 import { useWorkoutStore, type WorkoutExercise, type WorkoutSummary } from '@/store/workout-store';
-
-function triggerHaptic() {
-  if (Platform.OS !== 'web') {
-    import('expo-haptics').then((h) => h.notificationAsync(h.NotificationFeedbackType.Success));
-  }
-}
 
 function useNativeKeepAwake() {
   useEffect(() => {
@@ -65,7 +60,6 @@ export default function WorkoutScreen() {
             compact
             onPress={async () => {
               const s = await store.finish();
-              triggerHaptic();
               setSummary(s);
             }}>
             结束训练
@@ -193,7 +187,7 @@ function ExercisePanel({ ex }: { ex: WorkoutExercise }) {
       rpe,
     });
     setRpe(null);
-    triggerHaptic();
+    void playWorkoutHaptic('set');
   }
 
   return (
@@ -310,7 +304,7 @@ function RestTimer() {
       const next = Math.max(0, Math.ceil((restEndsAt - Date.now()) / 1000));
       setRemain(next);
       if (next === 0) {
-        triggerHaptic();
+        void playWorkoutHaptic('rest-complete');
         skipRest();
       }
     };

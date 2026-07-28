@@ -1,5 +1,7 @@
 import { eq } from 'drizzle-orm';
 
+import type { GymEquipmentId, TrainingLocation } from '@/data/gym-equipment';
+
 import { logOp } from '../oplog';
 import { userProfile } from '../schema';
 import type { DB } from '../types';
@@ -14,6 +16,8 @@ export type UserProfile = {
   daysPerWeek?: number;
   sessionMinutes?: number;
   equipment?: string[];
+  trainingLocation?: TrainingLocation;
+  gymEquipmentIds?: GymEquipmentId[];
   injuries?: string[];
   cardioPref?: string;
   incomplete?: boolean;
@@ -34,8 +38,10 @@ export async function getProfile(db: DB): Promise<UserProfile | null> {
     goal: (r.goal as UserProfile['goal']) ?? undefined,
     daysPerWeek: r.daysPerWeek ?? undefined,
     sessionMinutes: r.sessionMinutes ?? undefined,
-    equipment: r.equipmentJson ? JSON.parse(r.equipmentJson) : undefined,
-    injuries: r.injuriesJson ? JSON.parse(r.injuriesJson) : undefined,
+    equipment: parseStringArray(r.equipmentJson),
+    trainingLocation: (r.trainingLocation as TrainingLocation | null) ?? undefined,
+    gymEquipmentIds: parseStringArray(r.gymEquipmentJson) as GymEquipmentId[] | undefined,
+    injuries: parseStringArray(r.injuriesJson),
     cardioPref: r.cardioPref ?? undefined,
     incomplete: r.incomplete,
   };
@@ -54,6 +60,9 @@ export async function saveProfile(db: DB, profile: UserProfile): Promise<void> {
     daysPerWeek: profile.daysPerWeek ?? null,
     sessionMinutes: profile.sessionMinutes ?? null,
     equipmentJson: profile.equipment ? JSON.stringify(profile.equipment) : null,
+    trainingLocation: profile.trainingLocation ?? null,
+    gymEquipmentJson:
+      profile.gymEquipmentIds !== undefined ? JSON.stringify(profile.gymEquipmentIds) : null,
     injuriesJson: profile.injuries ? JSON.stringify(profile.injuries) : null,
     cardioPref: profile.cardioPref ?? null,
     incomplete: profile.incomplete ?? false,
@@ -64,4 +73,16 @@ export async function saveProfile(db: DB, profile: UserProfile): Promise<void> {
     .values({ ...row, createdAt: now })
     .onConflictDoUpdate({ target: userProfile.id, set: row });
   await logOp(db, 'user_profile', PROFILE_ID, 'put', { ...row, createdAt: now });
+}
+
+function parseStringArray(value: string | null): string[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -8,7 +8,18 @@
     "scheme": "nexset",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "appleTeamId": "UG6PSPW83R",
+      "bundleIdentifier": "com.anonymous.nexset",
+      "infoPlist": {
+        "NSSupportsLiveActivities": true,
+        "NSSupportsLiveActivitiesFrequentUpdates": true
+      },
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.com.anonymous.nexset"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -35,11 +46,67 @@
         }
       ],
       "expo-sqlite",
-      "expo-secure-store"
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": true
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 Nexset 读取你选择的器材图片或视频，以便识别健身房器材。",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.anonymous.nexset.widgets",
+          "groupIdentifier": "group.com.anonymous.nexset",
+          "frequentUpdates": true,
+          "widgets": [
+            {
+              "name": "NexsetWorkoutWidget",
+              "displayName": "Nexset 训练",
+              "description": "开始训练，并在训练中查看当前动作和完成进度。",
+              "supportedFamilies": [
+                "systemSmall",
+                "systemMedium"
+              ],
+              "contentMarginsDisabled": false,
+              "ios": {
+                "supportedFamilies": [
+                  "systemSmall",
+                  "systemMedium"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "Nexset 读取你的体重、体脂、心率和训练记录，用于同步训练数据与趋势。",
+          "NSHealthUpdateUsageDescription": "Nexset 将你完成的训练和身体数据写入 Apple 健康。",
+          "background": true
+        }
+      ],
+      "@bacons/apple-targets"
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
+      "reactCompiler": true,
+      "inlineModules": {
+        "watchedDirectories": [
+          "native"
+        ]
+      }
     }
   }
 }

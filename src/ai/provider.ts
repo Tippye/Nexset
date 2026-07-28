@@ -48,12 +48,11 @@ async function requestOpenAI(
   request: AIRequest,
   fetchImpl: FetchLike,
 ): Promise<AIResponse> {
-  const streaming = !!request.onText;
   const body: Record<string, unknown> = {
     model: config.model,
     messages: request.messages.map(toOpenAIMessage),
     max_tokens: request.maxTokens ?? 4096,
-    stream: streaming,
+    stream: true,
   };
   if (request.temperature != null) body.temperature = request.temperature;
   if (request.tools?.length) {
@@ -79,8 +78,8 @@ async function requestOpenAI(
     fetchImpl,
   );
 
-  if (streaming && isEventStream(response)) {
-    return parseOpenAIStream(response, request.onText!);
+  if (isEventStream(response)) {
+    return parseOpenAIStream(response, request.onText ?? ignoreTextDelta);
   }
   return parseOpenAIJson(await parseJsonResponse(response));
 }
@@ -182,7 +181,6 @@ async function requestAnthropic(
   request: AIRequest,
   fetchImpl: FetchLike,
 ): Promise<AIResponse> {
-  const streaming = !!request.onText;
   const system = request.messages
     .filter((message) => message.role === 'system')
     .map((message) => message.content)
@@ -193,7 +191,7 @@ async function requestAnthropic(
     messages: request.messages
       .filter((message) => message.role !== 'system')
       .map(toAnthropicMessage),
-    stream: streaming,
+    stream: true,
   };
   if (system) body.system = system;
   if (request.temperature != null) body.temperature = request.temperature;
@@ -218,8 +216,8 @@ async function requestAnthropic(
     fetchImpl,
   );
 
-  if (streaming && isEventStream(response)) {
-    return parseAnthropicStream(response, request.onText!);
+  if (isEventStream(response)) {
+    return parseAnthropicStream(response, request.onText ?? ignoreTextDelta);
   }
   return parseAnthropicJson(await parseJsonResponse(response));
 }
@@ -446,6 +444,10 @@ function endpoint(baseUrl: string, suffix: string): string {
 
 function isEventStream(response: Response): boolean {
   return response.headers.get('content-type')?.includes('text/event-stream') ?? false;
+}
+
+function ignoreTextDelta(): void {
+  // Streaming transport is always enabled; rendering incremental text is optional.
 }
 
 async function consumeSSE(response: Response, onValue: (value: unknown) => void): Promise<void> {

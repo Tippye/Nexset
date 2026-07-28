@@ -4,6 +4,7 @@ import { SEED_EXERCISES, forbiddenExerciseIds } from '@/data/exercises';
 import type { Exercise } from '@/db/repositories/exercise-repo';
 import type { UserProfile } from '@/db/repositories/profile-repo';
 
+import { isExerciseSupportedByProfile } from '../equipment-availability';
 import { computeBaseline, computeTargets, proteinFoodExample } from '../nutrition';
 import { AiPlanSchema, toPlanInput } from '../plan-schema';
 import { generateTemplatePlan } from '../plan-templates';
@@ -131,6 +132,32 @@ describe('plan validators (four hard checks)', () => {
     const r = validatePlanInput(many, ctx);
     expect(r.warnings.some((w) => w.includes('时长预算'))).toBe(true);
   });
+
+  it('rejects machine exercises that are not covered by the selected exact equipment', () => {
+    const detailedProfile: UserProfile = {
+      ...baseProfile,
+      trainingLocation: 'gym',
+      equipment: ['machine'],
+      gymEquipmentIds: ['leg_press'],
+    };
+    const bad = {
+      ...basePlan,
+      days: [
+        {
+          ...validDay,
+          exercises: [
+            {
+              ...validDay.exercises[0],
+              exerciseId: 'machine_chest_press',
+            },
+          ],
+        },
+      ],
+    };
+    const result = validatePlanInput(bad, { ...ctx, profile: detailedProfile });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.includes('未选择的器材'))).toBe(true);
+  });
 });
 
 describe('template plan engine (I-1.3)', () => {
@@ -179,6 +206,21 @@ describe('template plan engine (I-1.3)', () => {
       .flatMap((d) => d.exercises)
       .find((e) => e.exerciseId === 'barbell_bench_press');
     expect(interBench?.weightKg).toBeNull();
+  });
+
+  it('keeps every template exercise within the exact selected equipment capabilities', () => {
+    const profile: UserProfile = {
+      ...baseProfile,
+      daysPerWeek: 2,
+      trainingLocation: 'gym',
+      equipment: ['machine'],
+      gymEquipmentIds: ['leg_press'],
+    };
+    const result = generateTemplatePlan(profile, EXERCISES, new Set());
+    expect(result.ok).toBe(true);
+    for (const exercise of result.plan.days.flatMap((day) => day.exercises)) {
+      expect(isExerciseSupportedByProfile(profile, EXERCISES.get(exercise.exerciseId)!)).toBe(true);
+    }
   });
 });
 

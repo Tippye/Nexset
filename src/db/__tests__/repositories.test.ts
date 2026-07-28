@@ -59,11 +59,15 @@ describe('data layer (I-0.2)', () => {
       daysPerWeek: 4,
       sessionMinutes: 60,
       equipment: ['barbell', 'dumbbell'],
+      trainingLocation: 'gym',
+      gymEquipmentIds: ['barbell', 'dumbbells'],
       injuries: ['lower_back'],
     });
     const p = await getProfile(db);
     expect(p?.goal).toBe('hypertrophy');
     expect(p?.equipment).toEqual(['barbell', 'dumbbell']);
+    expect(p?.trainingLocation).toBe('gym');
+    expect(p?.gymEquipmentIds).toEqual(['barbell', 'dumbbells']);
     // upsert
     await saveProfile(db, { goal: 'fat_loss' });
     expect((await getProfile(db))?.goal).toBe('fat_loss');

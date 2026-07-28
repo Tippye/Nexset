@@ -16,6 +16,7 @@ import { getProfile, type UserProfile } from '@/db/repositories/profile-repo';
 import { getMetricHistory } from '@/db/repositories/body-repo';
 import { getRecentSessions, getSessionSets } from '@/db/repositories/workout-repo';
 import { computeBaseline } from '@/lib/nutrition';
+import { isExerciseSupportedByProfile } from '@/lib/equipment-availability';
 import {
   AI_PLAN_JSON_SCHEMA,
   AiPlanSchema,
@@ -106,6 +107,7 @@ export async function generatePlanProposal(
         goal: profile.goal,
         daysPerWeek: profile.daysPerWeek,
         equipment: profile.equipment,
+        gymEquipmentIds: profile.gymEquipmentIds,
         injuries: profile.injuries,
         request,
       }),
@@ -274,12 +276,8 @@ function availableExercises(
   exercises: Exercise[],
   forbidden: Set<string>,
 ): Exercise[] {
-  const configured = profile.equipment ?? [];
-  const equipment = new Set(
-    configured.length ? [...configured, 'bodyweight', 'other'] : ['bodyweight', 'other'],
-  );
   return exercises.filter(
-    (exercise) => equipment.has(exercise.equipment) && !forbidden.has(exercise.id),
+    (exercise) => isExerciseSupportedByProfile(profile, exercise) && !forbidden.has(exercise.id),
   );
 }
 

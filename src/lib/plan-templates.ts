@@ -3,6 +3,7 @@ import type { PlanDayInput, PlanInput } from '@/db/repositories/plan-repo';
 import type { UserProfile } from '@/db/repositories/profile-repo';
 
 import { computeBaseline, computeTargets } from './nutrition';
+import { isExerciseSupportedByProfile } from './equipment-availability';
 import { validatePlanInput, type PlanValidationResult } from './plan-validators';
 
 /**
@@ -46,20 +47,15 @@ function spreadDays(n: number): number[] {
 }
 
 class TemplateBuilder {
-  private owned: Set<string>;
-
   constructor(
     private profile: UserProfile,
     private exercises: Map<string, Exercise>,
     private forbidden: Set<string>,
-  ) {
-    const eq = profile.equipment ?? [];
-    this.owned = new Set(eq.length ? [...eq, 'bodyweight', 'other'] : ['bodyweight', 'other']);
-  }
+  ) {}
 
   private available(id: string): boolean {
     const ex = this.exercises.get(id);
-    return !!ex && !this.forbidden.has(id) && this.owned.has(ex.equipment);
+    return !!ex && !this.forbidden.has(id) && isExerciseSupportedByProfile(this.profile, ex);
   }
 
   /** First available candidate, following substitutes as fallback. */

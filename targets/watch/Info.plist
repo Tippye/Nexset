@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Nexset 在训练时读取心率，并将 Watch 训练保存到 Apple 健康。</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Nexset 将你在 Apple Watch 上完成的力量训练写入 Apple 健康。</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Nexset 使用手腕运动辅助计算训练次数；自动计数为 Beta，结果需由你确认。</string>
+</dict>
+</plist>

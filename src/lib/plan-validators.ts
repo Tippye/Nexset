@@ -2,6 +2,8 @@ import type { Exercise } from '@/db/repositories/exercise-repo';
 import type { PlanInput } from '@/db/repositories/plan-repo';
 import type { UserProfile } from '@/db/repositories/profile-repo';
 
+import { isExerciseSupportedByProfile } from './equipment-availability';
+
 /**
  * PRD 四道硬校验（§7.1 约束）：
  *  1. exercise_id 必须存在于动作库
@@ -73,6 +75,9 @@ export function validatePlanInput(
       }
       if (ctx.forbiddenIds.has(ex.exerciseId)) {
         errors.push(`动作 ${known.nameZh}(${ex.exerciseId}) 与用户伤病禁忌冲突（${day.label}）`);
+      }
+      if (!isExerciseSupportedByProfile(ctx.profile, known)) {
+        errors.push(`动作 ${known.nameZh}(${ex.exerciseId}) 需要用户未选择的器材（${day.label}）`);
       }
     }
   }

@@ -16,6 +16,8 @@ export const userProfile = sqliteTable('user_profile', {
   daysPerWeek: integer('days_per_week'),
   sessionMinutes: integer('session_minutes'),
   equipmentJson: text('equipment_json'), // string[]
+  trainingLocation: text('training_location'), // 'gym'|'home'|'bodyweight'
+  gymEquipmentJson: text('gym_equipment_json'), // detailed equipment ids
   injuriesJson: text('injuries_json'), // string[]
   cardioPref: text('cardio_pref'),
   incomplete: integer('incomplete', { mode: 'boolean' }).notNull().default(false),

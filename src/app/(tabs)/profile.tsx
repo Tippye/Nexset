@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, Platform, StyleSheet, View } from 'react-native';
 
 import {
   IconButton,
@@ -8,10 +8,19 @@ import {
   MetricGrid,
   PageHeader,
 } from '@/components/dashboard-ui';
+import { EquipmentSelector } from '@/components/equipment-selector';
 import { ScreenContainer } from '@/components/screen-container';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Chip, ChipRow, Input, Row, SectionTitle } from '@/components/ui-kit';
 import { Spacing } from '@/constants/theme';
+import {
+  DEFAULT_GYM_EQUIPMENT_IDS,
+  DEFAULT_HOME_EQUIPMENT_IDS,
+  equipmentTypesForSelection,
+  inferGymEquipmentIds,
+  type GymEquipmentId,
+  type TrainingLocation,
+} from '@/data/gym-equipment';
 import { getDb } from '@/db/client';
 import {
   addBodyMetric,
@@ -21,6 +30,7 @@ import {
 import type { UserProfile } from '@/db/repositories/profile-repo';
 import { useTheme } from '@/hooks/use-theme';
 import { localDate } from '@/lib/id';
+import { saveBodyMetricToAppleHealth } from '@/platform/apple/healthkit';
 import { useAppStore } from '@/store/app-store';
 
 const GOALS = [
@@ -35,15 +45,6 @@ const EXPERIENCE = [
   ['novice', '新手'],
   ['intermediate', '进阶'],
   ['advanced', '高级'],
-] as const;
-
-const EQUIPMENT = [
-  ['barbell', '杠铃'],
-  ['dumbbell', '哑铃'],
-  ['machine', '固定器械'],
-  ['cable', '绳索'],
-  ['kettlebell', '壶铃'],
-  ['cardio_machine', '有氧器械'],
 ] as const;
 
 const INJURIES = [
@@ -82,7 +83,12 @@ export default function ProfileScreen() {
   const [experience, setExperience] = useState<UserProfile['experience']>(profile?.experience);
   const [daysPerWeek, setDaysPerWeek] = useState(profile?.daysPerWeek ?? 3);
   const [sessionMinutes, setSessionMinutes] = useState(profile?.sessionMinutes ?? 60);
-  const [equipment, setEquipment] = useState<string[]>(profile?.equipment ?? []);
+  const [trainingLocation, setTrainingLocation] = useState<TrainingLocation>(
+    profile?.trainingLocation ?? (profile?.equipment?.length ? 'gym' : 'bodyweight'),
+  );
+  const [gymEquipmentIds, setGymEquipmentIds] = useState<GymEquipmentId[]>(
+    profile?.gymEquipmentIds ?? inferGymEquipmentIds(profile?.equipment),
+  );
   const [injuries, setInjuries] = useState<string[]>(profile?.injuries ?? []);
   const [saving, setSaving] = useState(false);
 
@@ -103,6 +109,13 @@ export default function ProfileScreen() {
   );
 
   async function saveProfile() {
+    if (
+      (trainingLocation === 'gym' || trainingLocation === 'home') &&
+      gymEquipmentIds.length === 0
+    ) {
+      Alert.alert('请至少选择一项器材', '如果没有可用器材，请改选“徒手 / 无器械”。');
+      return;
+    }
     const next: UserProfile = {
       sex,
       birthYear: optionalNumber(birthYear),
@@ -112,7 +125,9 @@ export default function ProfileScreen() {
       experience,
       daysPerWeek,
       sessionMinutes,
-      equipment,
+      equipment: equipmentTypesForSelection(gymEquipmentIds, trainingLocation),
+      trainingLocation,
+      gymEquipmentIds: trainingLocation === 'bodyweight' ? [] : gymEquipmentIds,
       injuries,
       cardioPref: profile?.cardioPref,
       incomplete: !sex || !weightKg || !goal || !experience || !daysPerWeek,
@@ -135,6 +150,10 @@ export default function ProfileScreen() {
     setSavingMetric(true);
     try {
       await addBodyMetric(getDb(), metric, value, metricDate || localDate());
+      if (metric === 'weight_kg' || metric === 'body_fat_pct') {
+        const metricAt = new Date(`${metricDate || localDate()}T12:00:00`);
+        void saveBodyMetricToAppleHealth(metric, value, metricAt).catch(() => undefined);
+      }
       if (metric === 'weight_kg') {
         setWeightKg(String(value));
         await updateProfile({
@@ -147,6 +166,16 @@ export default function ProfileScreen() {
       await loadMetricHistory();
     } finally {
       setSavingMetric(false);
+    }
+  }
+
+  function chooseTrainingLocation(location: TrainingLocation) {
+    setTrainingLocation(location);
+    if (location === 'gym' && gymEquipmentIds.length === 0) {
+      setGymEquipmentIds([...DEFAULT_GYM_EQUIPMENT_IDS]);
+    }
+    if (location === 'home' && gymEquipmentIds.length === 0) {
+      setGymEquipmentIds([...DEFAULT_HOME_EQUIPMENT_IDS]);
     }
   }
 
@@ -257,23 +286,40 @@ export default function ProfileScreen() {
         </ChipRow>
       </Card>
 
-      <SectionTitle>可用器械</SectionTitle>
+      <SectionTitle>训练场地与可用器材</SectionTitle>
       <Card>
         <ChipRow>
-          {EQUIPMENT.map(([key, label]) => (
-            <Chip
-              key={key}
-              label={label}
-              selected={equipment.includes(key)}
-              onPress={() => setEquipment(toggle(equipment, key))}
-            />
-          ))}
           <Chip
-            label="徒手"
-            selected={equipment.length === 0}
-            onPress={() => setEquipment([])}
+            label="商业健身房"
+            selected={trainingLocation === 'gym'}
+            onPress={() => chooseTrainingLocation('gym')}
+          />
+          <Chip
+            label="家中训练"
+            selected={trainingLocation === 'home'}
+            onPress={() => chooseTrainingLocation('home')}
+          />
+          <Chip
+            label="徒手 / 无器械"
+            selected={trainingLocation === 'bodyweight'}
+            onPress={() => chooseTrainingLocation('bodyweight')}
           />
         </ChipRow>
+        {trainingLocation === 'gym' || trainingLocation === 'home' ? (
+          <View style={styles.equipmentSelector}>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.equipmentHint}>
+              计划生成与后续调整只会使用这里选中的器材。
+            </ThemedText>
+            <EquipmentSelector
+              selectedIds={gymEquipmentIds}
+              onChange={setGymEquipmentIds}
+            />
+          </View>
+        ) : (
+          <ThemedText type="small" themeColor="textSecondary" style={styles.cardHint}>
+            已选择徒手训练，计划会使用自重动作与无需器械的有氧活动。
+          </ThemedText>
+        )}
       </Card>
 
       <SectionTitle>伤病部位</SectionTitle>
@@ -357,9 +403,21 @@ export default function ProfileScreen() {
         <Button variant="secondary" onPress={() => router.push('/settings/ai')}>
           打开 AI 设置
         </Button>
-        <ThemedText type="small" themeColor="textSecondary" style={styles.cardHint}>
-          WebDAV 同步和数据导出将在后续阶段接入；本地训练记录不依赖 AI 服务。
-        </ThemedText>
+        {Platform.OS === 'ios' ? (
+          <>
+            <View style={styles.buttonGap} />
+            <Button variant="secondary" onPress={() => router.push('/settings/apple' as never)}>
+              Apple Watch、健康与系统功能
+            </Button>
+            <View style={styles.buttonGap} />
+            <Button variant="secondary" onPress={() => router.push('/settings/webdav' as never)}>
+              WebDAV 同步设置
+            </Button>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.cardHint}>
+              Apple 健康同步由你主动授权；WebDAV 密码只保存在系统安全存储中。
+            </ThemedText>
+          </>
+        ) : null}
       </Card>
     </ScreenContainer>
   );
@@ -394,5 +452,7 @@ const styles = StyleSheet.create({
   innerGap: { height: Spacing.two },
   buttonGap: { height: Spacing.three },
   cardHint: { marginTop: Spacing.two },
+  equipmentSelector: { marginTop: Spacing.three },
+  equipmentHint: { marginBottom: Spacing.three },
   spaceBetween: { justifyContent: 'space-between' },
 });

@@ -13,12 +13,16 @@ Nexset 是一个 Expo / React Native 跨平台健身计划与训练记录应用�
 - AI 计划周视图、逐项编辑、确认启用和本地 Agent/Badcase 日志。
 - 近 7 天偏差报告、9 类计划 diff、安全 dry-run、48 小时忽略与 DailyAdjustAgent 建议卡。
 - 对话教练的本地意图前置路由、数据查询、动作要点、安全红线和确认式记组。
+- Apple Watch 开始训练、手动记组与设备端自动计数 Beta，支持离线排队回传。
+- Apple 健康授权、训练/心率/体重/体脂同步，以及 Nexset 训练与身体数据写回。
+- iOS 主屏训练组件、锁屏实时活动、常驻通知与灵动岛训练进度。
+- 快捷指令/App Intents、训练触感反馈、系统音频混音策略与 Apple Intelligence 本地预留层。
 
-真实模型对话的更开放问答仍需配置 API；WebDAV、健康平台和穿戴设备属于后续阶段，界面中不会伪装为已完成。
+真实模型对话的更开放问答仍需配置 API；WebDAV 属于后续阶段，界面中不会伪装为已完成。Apple 能力需要原生开发构建，不能在 Expo Go 中验证。
 
 ## 开发
 
-要求 Node.js 18+。
+要求 Node.js 22.13+（或 24.3+）、完整 Xcode 与 CocoaPods。
 
 ```bash
 npm install
@@ -31,6 +35,8 @@ npm run web
 npm run ios
 npm run android
 ```
+
+Apple 原生签名、开发构建和真机验证步骤见 [Apple 生态接入说明](docs/apple-ecosystem.md)。
 
 ## AI 配置
 
@@ -69,6 +75,10 @@ src/data/                内置动作库与伤病禁忌映射
 src/db/                  SQLite Schema、迁移与 repositories
 src/lib/                 计划 Schema、模板、营养公式与硬校验
 src/store/               Zustand 应用状态
+src/platform/apple/      HealthKit、Watch、实时活动、音频与系统入口桥接
+widgets/                 主屏组件、锁屏实时活动与灵动岛布局
+targets/watch/           Apple Watch SwiftUI 应用、训练会话与动作计数
+native/                  Apple Intelligence / App Intent 原生桥接
 eval/                    计划黄金集回归
 ```
 

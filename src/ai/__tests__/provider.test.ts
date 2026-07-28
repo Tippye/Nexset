@@ -18,6 +18,7 @@ describe('AI provider', () => {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer secret');
       const body = JSON.parse(String(init?.body));
       expect(body.model).toBe('test-model');
+      expect(body.stream).toBe(true);
       expect(body.tools[0].function.name).toBe('submit');
       return jsonResponse({
         choices: [
@@ -66,6 +67,7 @@ describe('AI provider', () => {
       expect(headers.get('anthropic-version')).toBe('2023-06-01');
       const body = JSON.parse(String(init?.body));
       expect(body.system).toBe('system');
+      expect(body.stream).toBe(true);
       expect(body.tools[0].input_schema).toEqual({ type: 'object' });
       return jsonResponse({
         content: [

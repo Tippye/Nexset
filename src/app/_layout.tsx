@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useColorScheme, View } from 'react-native';
 
 import { initDatabase } from '@/db/client';
+import { WorkoutPlatformBridge } from '@/platform/apple/workout-platform-bridge';
 import { useAppStore } from '@/store/app-store';
 
 SplashScreen.preventAutoHideAsync();
@@ -27,11 +28,14 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <WorkoutPlatformBridge />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
         <Stack.Screen name="workout/[sessionId]" options={{ gestureEnabled: false }} />
         <Stack.Screen name="settings/ai" />
+        <Stack.Screen name="settings/apple" />
+        <Stack.Screen name="settings/webdav" />
       </Stack>
     </ThemeProvider>
   );

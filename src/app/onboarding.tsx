@@ -4,10 +4,18 @@ import { StyleSheet, View } from 'react-native';
 
 import { generatePlanProposal, recordPlanDecision } from '@/ai/agents/plan-generation';
 import { loadAIConfig } from '@/ai/config';
+import { EquipmentSelector } from '@/components/equipment-selector';
 import { ScreenContainer } from '@/components/screen-container';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Chip, ChipRow, Input, Row, SectionTitle } from '@/components/ui-kit';
 import { Spacing } from '@/constants/theme';
+import {
+  DEFAULT_GYM_EQUIPMENT_IDS,
+  DEFAULT_HOME_EQUIPMENT_IDS,
+  equipmentTypesForSelection,
+  type GymEquipmentId,
+  type TrainingLocation,
+} from '@/data/gym-equipment';
 import { getDb } from '@/db/client';
 import { getExercisesByIds } from '@/db/repositories/exercise-repo';
 import { activatePlan, createPlan } from '@/db/repositories/plan-repo';
@@ -28,12 +36,6 @@ const EXPERIENCE = [
   ['novice', '新手（<1年）'],
   ['intermediate', '进阶（1-3年）'],
   ['advanced', '高级（3年+）'],
-] as const;
-
-const EQUIPMENT_PRESETS = [
-  ['gym', '商业健身房', ['barbell', 'dumbbell', 'machine', 'cable', 'kettlebell', 'cardio_machine']],
-  ['home_dumbbell', '家庭哑铃/壶铃', ['dumbbell', 'kettlebell']],
-  ['bodyweight', '徒手/无器械', []],
 ] as const;
 
 const INJURIES = [
@@ -60,7 +62,8 @@ export default function OnboardingScreen() {
   const [experience, setExperience] = useState<UserProfile['experience']>();
   const [daysPerWeek, setDaysPerWeek] = useState<number>();
   const [sessionMinutes, setSessionMinutes] = useState<number>();
-  const [equipPreset, setEquipPreset] = useState<string>();
+  const [trainingLocation, setTrainingLocation] = useState<TrainingLocation>();
+  const [gymEquipmentIds, setGymEquipmentIds] = useState<GymEquipmentId[]>([]);
   const [injuries, setInjuries] = useState<string[]>([]);
   const [preview, setPreview] = useState<PlanValidationResult | null>(null);
   const [previewLogId, setPreviewLogId] = useState<string>();
@@ -70,7 +73,6 @@ export default function OnboardingScreen() {
   const totalSteps = 5;
 
   const profile = useMemo<UserProfile>(() => {
-    const preset = EQUIPMENT_PRESETS.find(([k]) => k === equipPreset);
     return {
       sex,
       birthYear: birthYear ? Number(birthYear) : undefined,
@@ -80,11 +82,38 @@ export default function OnboardingScreen() {
       experience,
       daysPerWeek,
       sessionMinutes,
-      equipment: preset ? [...preset[2]] : undefined,
+      equipment: trainingLocation
+        ? equipmentTypesForSelection(gymEquipmentIds, trainingLocation)
+        : undefined,
+      trainingLocation,
+      gymEquipmentIds:
+        trainingLocation === 'bodyweight' ? [] : trainingLocation ? gymEquipmentIds : undefined,
       injuries,
       incomplete: !sex || !weightKg || !goal || !experience || !daysPerWeek,
     };
-  }, [sex, birthYear, heightCm, weightKg, goal, experience, daysPerWeek, sessionMinutes, equipPreset, injuries]);
+  }, [
+    sex,
+    birthYear,
+    heightCm,
+    weightKg,
+    goal,
+    experience,
+    daysPerWeek,
+    sessionMinutes,
+    trainingLocation,
+    gymEquipmentIds,
+    injuries,
+  ]);
+
+  function chooseTrainingLocation(location: TrainingLocation) {
+    setTrainingLocation(location);
+    if (location === 'gym' && gymEquipmentIds.length === 0) {
+      setGymEquipmentIds([...DEFAULT_GYM_EQUIPMENT_IDS]);
+    }
+    if (location === 'home' && gymEquipmentIds.length === 0) {
+      setGymEquipmentIds([...DEFAULT_HOME_EQUIPMENT_IDS]);
+    }
+  }
 
   async function buildPreview() {
     setBusy(true);
@@ -201,12 +230,37 @@ export default function OnboardingScreen() {
 
       {step === 3 && (
         <View>
-          <SectionTitle>可用器械</SectionTitle>
+          <SectionTitle>主要训练场地</SectionTitle>
           <ChipRow>
-            {EQUIPMENT_PRESETS.map(([k, label]) => (
-              <Chip key={k} label={label} selected={equipPreset === k} onPress={() => setEquipPreset(k)} />
-            ))}
+            <Chip
+              label="商业健身房"
+              selected={trainingLocation === 'gym'}
+              onPress={() => chooseTrainingLocation('gym')}
+            />
+            <Chip
+              label="家中训练"
+              selected={trainingLocation === 'home'}
+              onPress={() => chooseTrainingLocation('home')}
+            />
+            <Chip
+              label="徒手 / 无器械"
+              selected={trainingLocation === 'bodyweight'}
+              onPress={() => chooseTrainingLocation('bodyweight')}
+            />
           </ChipRow>
+          {trainingLocation === 'gym' || trainingLocation === 'home' ? (
+            <View style={styles.equipmentSelector}>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.equipmentHint}>
+                {trainingLocation === 'gym'
+                  ? '选择这家健身房实际具备的器材，计划只会使用已选器材。'
+                  : '选择家中已有器材，仍可随时改回徒手训练。'}
+              </ThemedText>
+              <EquipmentSelector
+                selectedIds={gymEquipmentIds}
+                onChange={setGymEquipmentIds}
+              />
+            </View>
+          ) : null}
         </View>
       )}
 
@@ -251,6 +305,12 @@ export default function OnboardingScreen() {
           <>
             <Button
               onPress={() => (step === totalSteps - 1 ? buildPreview() : setStep(step + 1))}
+              disabled={
+                step === 3 &&
+                (!trainingLocation ||
+                  ((trainingLocation === 'gym' || trainingLocation === 'home') &&
+                    gymEquipmentIds.length === 0))
+              }
               loading={busy}>
               {step === totalSteps - 1 ? '生成计划' : '下一步'}
             </Button>
@@ -348,4 +408,6 @@ function PlanPreview({ preview }: { preview: PlanValidationResult }) {
 const styles = StyleSheet.create({
   stepHint: { marginTop: 4, marginBottom: Spacing.two },
   footer: { marginTop: Spacing.four },
+  equipmentSelector: { marginTop: Spacing.three },
+  equipmentHint: { marginBottom: Spacing.three },
 });

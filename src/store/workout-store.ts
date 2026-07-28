@@ -33,9 +33,12 @@ export type SetDraft = {
   distanceM?: number | null;
   rpe?: number | null;
   isWarmup?: boolean;
+  source?: 'manual' | 'watch_manual' | 'watch_auto' | 'chat';
+  confidence?: number | null;
+  status?: 'confirmed' | 'pending';
 };
 
-type WorkoutState = {
+export type WorkoutState = {
   sessionId: string | null;
   planId: string | null;
   planDayId: string | null;
@@ -44,6 +47,7 @@ type WorkoutState = {
   currentIndex: number;
   restEndsAt: number | null;
   startedAt: number | null;
+  endedAt: number | null;
 
   startFromPlanDay: (planId: string, day: PlanDayDetail) => Promise<string>;
   startEmpty: () => Promise<string>;
@@ -102,6 +106,7 @@ export const useWorkoutStore = create<WorkoutState>((set, get) => ({
   currentIndex: 0,
   restEndsAt: null,
   startedAt: null,
+  endedAt: null,
 
   startFromPlanDay: async (planId, day) => {
     const db = getDb();
@@ -127,6 +132,7 @@ export const useWorkoutStore = create<WorkoutState>((set, get) => ({
       currentIndex: 0,
       restEndsAt: null,
       startedAt: Date.now(),
+      endedAt: null,
     });
     return sessionId;
   },
@@ -142,6 +148,7 @@ export const useWorkoutStore = create<WorkoutState>((set, get) => ({
       currentIndex: 0,
       restEndsAt: null,
       startedAt: Date.now(),
+      endedAt: null,
     });
     return sessionId;
   },
@@ -160,6 +167,9 @@ export const useWorkoutStore = create<WorkoutState>((set, get) => ({
       distanceM: draft.distanceM ?? null,
       rpe: draft.rpe ?? null,
       isWarmup: draft.isWarmup ?? false,
+      source: draft.source ?? 'manual',
+      confidence: draft.confidence ?? null,
+      status: draft.status ?? 'confirmed',
     });
     let prHit: WorkoutExercise['prHit'] = ex.prHit;
     if (!draft.isWarmup && draft.weightKg != null) {
@@ -235,6 +245,7 @@ export const useWorkoutStore = create<WorkoutState>((set, get) => ({
     const { sessionId, exercises, startedAt } = get();
     if (!sessionId) throw new Error('no active session');
     await endSession(getDb(), sessionId, { feeling, note });
+    const endedAt = Date.now();
     const totalVolumeKg = exercises
       .flatMap((e) => e.loggedSets)
       .filter((s) => !s.isWarmup)
@@ -253,6 +264,7 @@ export const useWorkoutStore = create<WorkoutState>((set, get) => ({
         done: e.loggedSets.length,
       })),
     };
+    set({ endedAt, restEndsAt: null });
     return summary;
   },
 
@@ -266,5 +278,6 @@ export const useWorkoutStore = create<WorkoutState>((set, get) => ({
       currentIndex: 0,
       restEndsAt: null,
       startedAt: null,
+      endedAt: null,
     }),
 }));

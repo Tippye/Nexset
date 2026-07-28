@@ -34,5 +34,12 @@ export const MIGRATIONS: Migration[] = [
       "CREATE TABLE `workout_sessions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`date` text NOT NULL,\n\t`plan_id` text,\n\t`plan_day_id` text,\n\t`started_at` integer NOT NULL,\n\t`ended_at` integer,\n\t`note` text,\n\t`feeling` text,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL\n);",
       "CREATE INDEX `idx_sessions_date` ON `workout_sessions` (`date`);"
     ]
+  },
+  {
+    "name": "0001_loving_starjammers",
+    "statements": [
+      "ALTER TABLE `user_profile` ADD `training_location` text;",
+      "ALTER TABLE `user_profile` ADD `gym_equipment_json` text;"
+    ]
   }
 ];
