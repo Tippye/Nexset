@@ -165,7 +165,7 @@ export default function TodayScreen() {
         <SetupPromptCard
           icon="cloud-outline"
           title="连接 WebDAV 同步"
-          detail="连接你自己的加密 WebDAV 目录，配置成功后此提示将自动隐藏。"
+          detail="连接你自己的 HTTP 或 HTTPS WebDAV 目录，配置成功后此提示将自动隐藏。"
           actionLabel="去连接"
           onPress={() => router.push('/settings/webdav' as never)}
           onDismiss={() => void dismissPrompt('webdav')}

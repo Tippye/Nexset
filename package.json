@@ -1,7 +1,13 @@
 {
-  "name": "app",
+  "name": "nexset",
+  "description": "Local-first, cross-platform fitness planning and workout tracking with optional AI coaching.",
   "main": "expo-router/entry",
   "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": "^22.13.0 || ^24.3.0 || >=25.0.0"
+  },
   "dependencies": {
     "@expo/ui": "~57.0.7",
     "@expo/vector-icons": "^15.0.2",
@@ -46,7 +52,7 @@
   "devDependencies": {
     "@bacons/apple-targets": "^5.0.0",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/jest": "^30.0.0",
+    "@types/jest": "^29.5.14",
     "@types/react": "~19.2.2",
     "better-sqlite3": "^13.0.1",
     "drizzle-kit": "^0.31.10",
@@ -64,11 +70,12 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "jest",
+    "test": "jest --watchman=false",
+    "test:ci": "jest --runInBand --watchman=false",
     "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run lint && npm run test:ci",
     "eval:plan": "tsx eval/plan-eval.ts",
     "eval:adjust": "tsx eval/adjust-eval.ts",
     "eval:intent": "tsx eval/intent-eval.ts"
-  },
-  "private": true
+  }
 }

@@ -127,7 +127,7 @@ export function EquipmentSelector({
                   opacity: pressed ? 0.82 : 1,
                 },
               ]}>
-              <View style={styles.imageFrame}>
+              <View style={[styles.imageFrame, { backgroundColor: theme.accentSoft }]}>
                 <Image
                   source={EQUIPMENT_IMAGES[item.id]}
                   style={styles.equipmentImage}
@@ -339,7 +339,6 @@ const styles = StyleSheet.create({
     height: 116,
     overflow: 'hidden',
     borderRadius: Radii.md,
-    backgroundColor: '#F7F1E8',
   },
   equipmentImage: { width: '100%', height: '100%' },
   selectionMark: {

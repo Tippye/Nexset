@@ -20,7 +20,7 @@ Nexset 的 Apple 适配通过 Expo 57 原生开发构建生成 iPhone、Widget/L
    - Watch：`com.anonymous.nexset.watch`
    - App Group：`group.com.anonymous.nexset`
 3. 为 App 和 Watch 开启 HealthKit，为 App、Widget 和 Watch 开启相同 App Group；让 Xcode 自动管理签名。
-4. 使用受 React Native 0.86 支持的 Node.js 22.13+ 或 24.3+，并安装完整 Xcode 与 CocoaPods 1.16.2+。
+4. 使用 Node.js 22.13.x、24.3+ 或 25+（不要使用 Node.js 23），并安装完整 Xcode 与 CocoaPods 1.16.2+。
 5. 生成项目并安装到真机：
 
    ```bash

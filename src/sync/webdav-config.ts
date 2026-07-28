@@ -2,6 +2,8 @@ import { Platform } from 'react-native';
 
 import { getDb } from '@/db/client';
 import { getSetting, setSetting } from '@/db/repositories/settings-repo';
+import { webDavTransportErrorMessage } from '@/sync/webdav-error';
+import { isSupportedWebDavUrl } from '@/sync/webdav-url';
 
 const CONFIG_KEY = 'webdav_config';
 const PASSWORD_KEY = 'nexset.webdav.password';
@@ -34,7 +36,7 @@ export async function loadWebDavConfig(): Promise<WebDavConfig | null> {
 export function isWebDavConfigured(config: WebDavConfig | null): config is WebDavConfig {
   return !!(
     config?.connectedAt &&
-    isHttpsUrl(config.baseUrl) &&
+    isSupportedWebDavUrl(config.baseUrl) &&
     config.username.trim() &&
     config.password
   );
@@ -64,6 +66,10 @@ export async function testWebDavConnection(config: WebDavConfig): Promise<void> 
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('连接超时，请检查服务器地址和网络');
+    }
+    const transportMessage = webDavTransportErrorMessage(error);
+    if (transportMessage) {
+      throw new Error(transportMessage);
     }
     throw error;
   } finally {
@@ -99,7 +105,9 @@ function normalizeWebDavConfig(config: WebDavConfig): WebDavConfig {
   const baseUrl = config.baseUrl.trim();
   const username = config.username.trim();
   const password = config.password;
-  if (!isHttpsUrl(baseUrl)) throw new Error('请输入有效的 HTTPS WebDAV 地址');
+  if (!isSupportedWebDavUrl(baseUrl)) {
+    throw new Error('请输入有效的 HTTP 或 HTTPS WebDAV 地址');
+  }
   if (!username) throw new Error('请输入用户名');
   if (!password) throw new Error('请输入密码或应用专用密码');
   return {
@@ -108,14 +116,6 @@ function normalizeWebDavConfig(config: WebDavConfig): WebDavConfig {
     username,
     password,
   };
-}
-
-function isHttpsUrl(value: string): boolean {
-  try {
-    return new URL(value.trim()).protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 async function loadPassword(): Promise<string> {

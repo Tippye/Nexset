@@ -2,6 +2,7 @@
   "expo": {
     "name": "Nexset",
     "slug": "nexset",
+    "description": "本地优先的跨平台健身计划、训练记录与可选 AI 教练应用。",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -9,11 +10,14 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "appleTeamId": "UG6PSPW83R",
       "bundleIdentifier": "com.anonymous.nexset",
       "infoPlist": {
         "NSSupportsLiveActivities": true,
-        "NSSupportsLiveActivitiesFrequentUpdates": true
+        "NSSupportsLiveActivitiesFrequentUpdates": true,
+        "NSLocalNetworkUsageDescription": "Nexset 需要访问局域网中的 WebDAV 服务器，以同步训练数据。",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       },
       "entitlements": {
         "com.apple.security.application-groups": [
@@ -97,6 +101,7 @@
           "background": true
         }
       ],
+      "./plugins/with-http-cleartext",
       "@bacons/apple-targets"
     ],
     "experiments": {

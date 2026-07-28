@@ -5,14 +5,17 @@ import { Alert, StyleSheet, View } from 'react-native';
 
 import { loadAIConfig } from '@/ai/config';
 import {
-  generatePlanProposal,
+  generateInteractivePlanTurn,
+  generateTraditionalPlanProposal,
   recordPlanDecision,
   type GeneratedPlanProposal,
+  type PlanClarificationTurn,
 } from '@/ai/agents/plan-generation';
 import type { AIConfig } from '@/ai/types';
 import { getDefaultIntelligenceStatus } from '@/intelligence/default-router';
 import type { IntelligenceStatus } from '@/intelligence/types';
 import { IconButton, PageHeader, StatusBadge } from '@/components/dashboard-ui';
+import { PlanClarificationCard } from '@/components/plan-clarification-card';
 import { ScreenContainer } from '@/components/screen-container';
 import { CoachChatPanel } from '@/components/coach-chat-panel';
 import { ThemedText } from '@/components/themed-text';
@@ -29,6 +32,7 @@ import {
 } from '@/db/repositories/plan-repo';
 import { useTheme } from '@/hooks/use-theme';
 import { computeBaseline, proteinFoodExample } from '@/lib/nutrition';
+import { getMissingTraditionalPlanRequirements } from '@/lib/plan-profile-requirements';
 import { validatePlanInput } from '@/lib/plan-validators';
 import { useAppStore } from '@/store/app-store';
 
@@ -39,6 +43,7 @@ export default function CoachScreen() {
   const profile = useAppStore((state) => state.profile);
   const activePlan = useAppStore((state) => state.activePlan);
   const refreshPlan = useAppStore((state) => state.refreshPlan);
+  const updateProfile = useAppStore((state) => state.updateProfile);
   const [config, setConfig] = useState<AIConfig | null>(null);
   const [intelligenceStatus, setIntelligenceStatus] = useState<IntelligenceStatus | null>(null);
   const [request, setRequest] = useState('');
@@ -50,6 +55,10 @@ export default function CoachScreen() {
   const [streamed, setStreamed] = useState('');
   const [editing, setEditing] = useState(false);
   const [manuallyEdited, setManuallyEdited] = useState(false);
+  const [generationMode, setGenerationMode] = useState<'traditional' | 'ai'>();
+  const [clarificationHistory, setClarificationHistory] = useState<PlanClarificationTurn[]>([]);
+  const [clarificationQuestion, setClarificationQuestion] = useState('');
+  const [clarificationAnswer, setClarificationAnswer] = useState('');
 
   useFocusEffect(
     useCallback(() => {
@@ -72,30 +81,120 @@ export default function CoachScreen() {
     );
   }, []);
 
-  async function generate() {
-    if (busy) return;
+  async function clearCurrentProposal() {
     if (proposal?.logId) await recordPlanDecision(proposal.logId, 'reject');
-    setBusy(true);
     setProposal(null);
     setDraft(null);
     setEditing(false);
     setManuallyEdited(false);
+  }
+
+  async function generateTraditional() {
+    if (busy) return;
+    const missing = getMissingTraditionalPlanRequirements(profile ?? {});
+    if (missing.length) {
+      Alert.alert(
+        '还缺少必要信息',
+        `传统生成需要先补充：${missing.map((item) => item.label).join('、')}。你也可以直接选择 AI 生成，让 AI 根据现有资料继续追问。`,
+      );
+      return;
+    }
+
+    await clearCurrentProposal();
+    setBusy(true);
+    setGenerationMode('traditional');
+    setClarificationHistory([]);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
     setStreamed('');
-    setStatus('正在准备安全约束…');
+    setStatus('正在根据完整资料生成本地计划…');
     try {
-      const next = await generatePlanProposal(config, {
+      const next = await generateTraditionalPlanProposal();
+      setProposal(next);
+      setDraft(next.plan);
+    } catch (error) {
+      Alert.alert(
+        '传统生成失败',
+        error instanceof Error ? error.message : '暂时无法生成本地计划',
+      );
+    } finally {
+      setStatus('');
+      setBusy(false);
+      setGenerationMode(undefined);
+    }
+  }
+
+  async function runInteractiveTurn(
+    history: PlanClarificationTurn[],
+    clearProposal: boolean,
+  ): Promise<boolean> {
+    if (busy) return false;
+    if (clearProposal) await clearCurrentProposal();
+    setBusy(true);
+    setGenerationMode('ai');
+    setStreamed('');
+    setStatus('正在整理已填写信息…');
+    try {
+      const result = await generateInteractivePlanTurn(config, {
         userRequest: request,
+        history,
         onProgress: setStatus,
         onText: (delta) => setStreamed((current) => current + delta),
       });
-      setProposal(next);
-      setDraft(next.plan);
-      setStatus('');
+      if (result.kind === 'question') {
+        setClarificationQuestion(result.question);
+        setClarificationAnswer('');
+      } else {
+        setProposal(result.proposal);
+        setDraft(result.proposal.plan);
+        setClarificationQuestion('');
+        setClarificationAnswer('');
+      }
+      return true;
     } catch (error) {
-      Alert.alert('生成失败', error instanceof Error ? error.message : '暂时无法生成计划');
-      setStatus('');
+      Alert.alert(
+        'AI 生成失败',
+        error instanceof Error ? error.message : '暂时无法连接 AI 服务',
+      );
+      return false;
     } finally {
+      setStatus('');
       setBusy(false);
+      setGenerationMode(undefined);
+    }
+  }
+
+  async function startInteractiveGeneration() {
+    if (intelligenceStatus && !intelligenceStatus.available) {
+      Alert.alert(
+        'AI 暂不可用',
+        intelligenceStatus.reason ?? '请先在 AI 设置中配置可用模型。',
+      );
+      return;
+    }
+    setClarificationHistory([]);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
+    await runInteractiveTurn([], true);
+  }
+
+  async function submitClarificationAnswer() {
+    const answer = clarificationAnswer.trim();
+    if (!clarificationQuestion || !answer || busy) return;
+    const previousHistory = clarificationHistory;
+    const previousQuestion = clarificationQuestion;
+    const nextHistory = [
+      ...previousHistory,
+      { question: previousQuestion, answer },
+    ];
+    setClarificationHistory(nextHistory);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
+    const accepted = await runInteractiveTurn(nextHistory, false);
+    if (!accepted) {
+      setClarificationHistory(previousHistory);
+      setClarificationQuestion(previousQuestion);
+      setClarificationAnswer(answer);
     }
   }
 
@@ -118,15 +217,23 @@ export default function CoachScreen() {
     try {
       const exercises = await listExercises(getDb());
       const map = new Map(exercises.map((exercise) => [exercise.id, exercise]));
+      const validationProfile = proposal.resolvedProfile ?? profile ?? {};
       const checked = validatePlanInput(draft, {
         exercises: map,
-        forbiddenIds: forbiddenExerciseIds(profile?.injuries ?? []),
-        profile: profile ?? {},
-        tdee: computeBaseline(profile ?? {}).tdee,
+        forbiddenIds: forbiddenExerciseIds(validationProfile.injuries ?? []),
+        profile: validationProfile,
+        tdee: computeBaseline(validationProfile).tdee,
       });
       if (!checked.ok) {
         Alert.alert('计划未通过安全校验', checked.errors.join('\n'));
         return;
+      }
+      if (proposal.resolvedProfile) {
+        await updateProfile({
+          ...proposal.resolvedProfile,
+          incomplete:
+            getMissingTraditionalPlanRequirements(proposal.resolvedProfile).length > 0,
+        });
       }
       const planId = await createPlan(getDb(), checked.plan);
       await activatePlan(getDb(), planId);
@@ -135,6 +242,9 @@ export default function CoachScreen() {
       setProposal(null);
       setDraft(null);
       setEditing(false);
+      setClarificationHistory([]);
+      setClarificationQuestion('');
+      setClarificationAnswer('');
       Alert.alert('新计划已启用', '原计划已归档，今天页会按新计划展示。');
     } finally {
       setBusy(false);
@@ -146,10 +256,13 @@ export default function CoachScreen() {
     setProposal(null);
     setDraft(null);
     setEditing(false);
+    setClarificationHistory([]);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
   }
 
   const configured = intelligenceStatus?.available ?? false;
-  const providerLabel = intelligenceStatus?.providerName ?? '本地安全模板';
+  const providerLabel = intelligenceStatus?.providerName ?? 'AI 未配置';
 
   return (
     <ScreenContainer>
@@ -191,11 +304,11 @@ export default function CoachScreen() {
               </StatusBadge>
             </Row>
             <ThemedText type="small" themeColor="textSecondary">
-              {configured
-                ? intelligenceStatus?.providerId === 'apple-foundation-models'
-                  ? '优先在设备端生成；执行失败会自动切换自定义云端，结果仍由本地硬校验兜底。'
-                  : 'Apple 设备端不可用时使用自定义云端；模型异常或校验失败会自动降级。'
-                : '当前没有可用模型，将生成不出设备的安全本地模板；也可配置自定义 LLM 服务。'}
+                {configured
+                  ? intelligenceStatus?.providerId === 'apple-foundation-models'
+                    ? '优先在设备端生成；资料不足时会逐项追问，最终结果仍由本地安全校验兜底。'
+                    : '使用自定义云端模型；资料不足时会逐项追问，不会静默切换为传统模板。'
+                  : '传统本地生成始终可用；如需交互式 AI 生成，请先配置可用模型。'}
             </ThemedText>
           </View>
         </Row>
@@ -220,17 +333,46 @@ export default function CoachScreen() {
         onChangeText={setRequest}
         placeholder="可选，例如：想重点提升引体向上，周三只能练 45 分钟"
         multiline
+        maxLength={2000}
         style={styles.request}
       />
-      <View style={styles.buttonGap} />
-      <Button onPress={generate} loading={busy}>
-        {configured ? `使用${providerLabel}生成计划` : '生成安全模板计划'}
-      </Button>
+
+      {clarificationQuestion ? (
+        <PlanClarificationCard
+          question={clarificationQuestion}
+          answer={clarificationAnswer}
+          onAnswerChange={setClarificationAnswer}
+          onSubmit={() => void submitClarificationAnswer()}
+          busy={busy}
+        />
+      ) : null}
+
+      <Row style={styles.generationButtons}>
+        <Button
+          variant="secondary"
+          onPress={() => void generateTraditional()}
+          disabled={busy}
+          loading={busy && generationMode === 'traditional'}
+          style={styles.generationButton}>
+          传统生成
+        </Button>
+        <Button
+          onPress={() => void startInteractiveGeneration()}
+          disabled={busy}
+          loading={busy && generationMode === 'ai'}
+          style={styles.generationButton}>
+          AI 生成
+        </Button>
+      </Row>
 
       {busy ? (
         <Card style={styles.progressCard}>
           <Row>
-            <Ionicons name="sparkles" size={20} color={theme.accent} />
+            <Ionicons
+              name={generationMode === 'ai' ? 'sparkles' : 'shield-checkmark-outline'}
+              size={20}
+              color={theme.accent}
+            />
             <View style={styles.flex}>
               <ThemedText type="smallBold">{status || '正在生成计划…'}</ThemedText>
               <ThemedText type="small" themeColor="textSecondary">
@@ -238,7 +380,7 @@ export default function CoachScreen() {
               </ThemedText>
             </View>
           </Row>
-          {streamed.trim() ? (
+          {generationMode === 'ai' && streamed.trim() ? (
             <ThemedText type="small" themeColor="textSecondary" style={styles.stream}>
               {streamed.slice(-300)}
             </ThemedText>
@@ -256,7 +398,9 @@ export default function CoachScreen() {
           onToggleEditing={() => setEditing((value) => !value)}
           onUpdateExercise={updateExercise}
           onApply={apply}
-          onRegenerate={generate}
+          onRegenerate={
+            proposal.source === 'ai' ? startInteractiveGeneration : generateTraditional
+          }
           onReject={reject}
         />
       ) : null}
@@ -505,6 +649,11 @@ const styles = StyleSheet.create({
   aiTitleRow: { justifyContent: 'space-between', alignItems: 'flex-start' },
   request: { minHeight: 88, textAlignVertical: 'top' },
   buttonGap: { height: Spacing.two },
+  generationButtons: {
+    alignItems: 'stretch',
+    marginTop: Spacing.three,
+  },
+  generationButton: { flex: 1 },
   progressCard: { marginTop: Spacing.three },
   stream: { marginTop: Spacing.two },
   proposal: { marginTop: Spacing.two },

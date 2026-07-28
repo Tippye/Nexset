@@ -7,16 +7,22 @@ import {
   type AgentUserDecision,
   updateAgentDecision,
 } from '@/db/repositories/agent-log-repo';
-import {
-  listExercises,
-  type Exercise,
-} from '@/db/repositories/exercise-repo';
+import { listExercises, type Exercise } from '@/db/repositories/exercise-repo';
 import type { PlanInput } from '@/db/repositories/plan-repo';
 import { getProfile, type UserProfile } from '@/db/repositories/profile-repo';
 import { getMetricHistory } from '@/db/repositories/body-repo';
 import { getRecentSessions, getSessionSets } from '@/db/repositories/workout-repo';
 import { computeBaseline } from '@/lib/nutrition';
 import { isExerciseSupportedByProfile } from '@/lib/equipment-availability';
+import {
+  EQUIPMENT_TYPES,
+  EXPERIENCE_VALUES,
+  GOAL_VALUES,
+  INJURY_TAGS,
+  resolveConversationProfile,
+  SEX_VALUES,
+  TRAINING_LOCATION_VALUES,
+} from '@/lib/plan-conversation-profile';
 import {
   AI_PLAN_JSON_SCHEMA,
   AiPlanSchema,
@@ -32,6 +38,7 @@ import {
 import { IntelligenceRoutingError, type IntelligenceRouter } from '@/intelligence/router';
 
 export const PLAN_AGENT_PROMPT_VERSION = 'plan-generation-v1';
+export const PLAN_CONVERSATION_PROMPT_VERSION = 'plan-generation-conversation-v1';
 
 export type GeneratedPlanProposal = {
   plan: PlanInput;
@@ -42,6 +49,40 @@ export type GeneratedPlanProposal = {
   routeReason?: string;
   logId?: string;
   fallbackReason?: string;
+  resolvedProfile?: UserProfile;
+};
+
+export type PlanClarificationTurn = {
+  question: string;
+  answer: string;
+};
+
+export type InteractivePlanGenerationResult =
+  | {
+      kind: 'question';
+      question: string;
+      providerId: string;
+      model?: string;
+      routeReason?: string;
+    }
+  | {
+      kind: 'plan';
+      proposal: GeneratedPlanProposal;
+    };
+
+type PlanAgentConversationOutput =
+  | { kind: 'question'; question: string }
+  | { kind: 'plan'; plan: AiPlan; resolvedProfile: UserProfile };
+
+type PlanGenerationContext = {
+  db: ReturnType<typeof getDb>;
+  profile: UserProfile;
+  exercises: Exercise[];
+  exerciseMap: Map<string, Exercise>;
+  forbidden: Set<string>;
+  available: Exercise[];
+  trainingSummary: Awaited<ReturnType<typeof buildTrainingSummary>>;
+  baseline: ReturnType<typeof computeBaseline>;
 };
 
 export async function generatePlanProposal(
@@ -54,15 +95,8 @@ export async function generatePlanProposal(
     onProgress?: (message: string) => void;
   } = {},
 ): Promise<GeneratedPlanProposal> {
-  const db = getDb();
-  const profile = (await getProfile(db)) ?? {};
-  const exercises = await listExercises(db);
-  const exerciseMap = new Map(exercises.map((exercise) => [exercise.id, exercise]));
-  const forbidden = forbiddenExerciseIds(profile.injuries ?? []);
-  const available = availableExercises(profile, exercises, forbidden);
-  const trainingSummary = await buildTrainingSummary(4);
-  const weightTrend = await getWeightTrend();
-  const baseline = computeBaseline(profile, weightTrend);
+  const context = await preparePlanGenerationContext();
+  const { db, profile, exerciseMap, forbidden, available, trainingSummary, baseline } = context;
 
   const definition = buildDefinition({
     profile,
@@ -162,6 +196,148 @@ export async function generatePlanProposal(
       forbidden,
       `AI 计划未能通过完整校验（${reason}），已安全降级为本地模板。`,
     );
+  }
+}
+
+export async function generateTraditionalPlanProposal(): Promise<GeneratedPlanProposal> {
+  const { profile, exerciseMap, forbidden } = await preparePlanGenerationContext();
+  const generated = generateTemplatePlan(profile, exerciseMap, forbidden);
+  if (!generated.ok) {
+    throw new Error(generated.errors.join('；') || '本地模板未能生成可用计划');
+  }
+  return {
+    plan: generated.plan,
+    warnings: generated.warnings,
+    source: 'template',
+    providerId: 'local-template',
+    routeReason: '用户选择传统本地生成',
+  };
+}
+
+export async function generateInteractivePlanTurn(
+  config: AIConfig | null,
+  options: {
+    userRequest?: string;
+    history?: PlanClarificationTurn[];
+    complete?: AIComplete;
+    router?: IntelligenceRouter;
+    onText?: (delta: string) => void;
+    onProgress?: (message: string) => void;
+  } = {},
+): Promise<InteractivePlanGenerationResult> {
+  const context = await preparePlanGenerationContext();
+  const { db, profile, exerciseMap, available, trainingSummary, baseline } = context;
+  const definition = buildConversationDefinition(context);
+  const request =
+    options.userRequest?.trim() || '请结合我已填写的资料，制定一份安全、可执行的训练计划。';
+  const history = (options.history ?? []).map((turn) => ({
+    question: turn.question.trim(),
+    answer: turn.answer.trim(),
+  }));
+  const state = {
+    user_request: request,
+    user_profile: profile,
+    recent_training_summary: trainingSummary,
+    nutrition_baseline: baseline,
+    exercise_library_summary: available.map(compactExercise),
+    clarification_history: history,
+  };
+  const policy = defaultIntelligencePolicy('plan_generation');
+  const router =
+    options.router ??
+    createDefaultIntelligenceRouter(config, { cloudComplete: options.complete });
+
+  try {
+    const routed = await router.execute(policy, (provider) =>
+      runAgent(
+        provider,
+        definition,
+        `以下是本次任务的可信本地状态。用户未填写的字段代表未知，不要当作否定回答。工具返回与这里的信息冲突时，以工具返回为准：\n${JSON.stringify(state)}`,
+        {
+          onText: options.onText,
+          onProgress: options.onProgress,
+        },
+      ),
+    );
+    const result = routed.result;
+    if (result.data.kind === 'question') {
+      return {
+        kind: 'question',
+        question: result.data.question,
+        providerId: routed.provider.id,
+        model: routed.provider.model,
+        routeReason: routed.routeReason,
+      };
+    }
+
+    const resolvedProfile = result.data.resolvedProfile;
+    const resolvedForbidden = forbiddenExerciseIds(resolvedProfile.injuries ?? []);
+    const resolvedBaseline = computeBaseline(resolvedProfile);
+    const validated = validatePlanInput(toPlanInput(result.data.plan, 'ai'), {
+      exercises: exerciseMap,
+      forbiddenIds: resolvedForbidden,
+      profile: resolvedProfile,
+      tdee: resolvedBaseline.tdee,
+    });
+    if (!validated.ok) throw new Error(validated.errors.join('；'));
+
+    const logId = await createAgentLog(db, {
+      agent: 'InteractivePlanGenerationAgent',
+      promptVersion: PLAN_CONVERSATION_PROMPT_VERSION,
+      inputSummary: JSON.stringify({
+        goal: profile.goal,
+        daysPerWeek: profile.daysPerWeek,
+        equipment: profile.equipment,
+        gymEquipmentIds: profile.gymEquipmentIds,
+        injuries: profile.injuries,
+        request,
+        clarificationRounds: history.length,
+      }),
+      output: result.raw,
+      validationResult: result.validationRetries ? 'retry_pass' : 'pass',
+      latencyMs: result.latencyMs,
+      providerId: routed.provider.id,
+      model: routed.provider.model,
+      routeReason: routed.routeReason,
+      fallbackHistory: routed.attempts,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      toolRounds: result.rounds,
+      privacyClass: policy.privacyClass,
+    });
+    return {
+      kind: 'plan',
+      proposal: {
+        plan: validated.plan,
+        warnings: validated.warnings,
+        source: 'ai',
+        providerId: routed.provider.id,
+        model: routed.provider.model,
+        routeReason: routed.routeReason,
+        logId,
+        resolvedProfile,
+      },
+    };
+  } catch (error) {
+    const reason = humanizeGenerationError(error);
+    const attempts = error instanceof IntelligenceRoutingError ? error.attempts : [];
+    await createAgentLog(db, {
+      agent: 'InteractivePlanGenerationAgent',
+      promptVersion: PLAN_CONVERSATION_PROMPT_VERSION,
+      inputSummary: JSON.stringify({
+        goal: profile.goal,
+        daysPerWeek: profile.daysPerWeek,
+        request,
+        clarificationRounds: history.length,
+      }),
+      output: { error: reason },
+      validationResult: 'fail',
+      isBadcase: true,
+      routeReason: 'AI 交互式计划生成失败，不自动降级本地模板',
+      fallbackHistory: attempts,
+      privacyClass: policy.privacyClass,
+    });
+    throw new Error(reason);
   }
 }
 
@@ -272,6 +448,83 @@ function buildDefinition(context: {
   };
 }
 
+function buildConversationDefinition(
+  context: PlanGenerationContext,
+): AgentDefinition<PlanAgentConversationOutput> {
+  const conversationContext = {
+    ...context,
+    available: hasExplicitEquipmentProfile(context.profile)
+      ? context.available
+      : context.exercises.filter((exercise) => !context.forbidden.has(exercise.id)),
+  };
+  const base = buildDefinition(conversationContext);
+  return {
+    ...base,
+    name: 'InteractivePlanGenerationAgent',
+    promptVersion: PLAN_CONVERSATION_PROMPT_VERSION,
+    systemPrompt: PLAN_CONVERSATION_SYSTEM_PROMPT,
+    outputDescription: JSON.stringify(AI_PLAN_CONVERSATION_JSON_SCHEMA),
+    proposalToolName: 'respond_plan_generation',
+    tools: [
+      ...base.tools.filter((tool) => tool.name !== 'propose_plan'),
+      {
+        kind: 'propose',
+        name: 'respond_plan_generation',
+        description:
+          '资料不足时返回一个最新问题；资料足够时返回完整计划。每轮只能选择其中一种结果。',
+        inputSchema: AI_PLAN_CONVERSATION_JSON_SCHEMA,
+      },
+    ],
+    validateOutput: (value) => validateConversationOutput(value, conversationContext),
+  };
+}
+
+function validateConversationOutput(
+  value: unknown,
+  context: PlanGenerationContext,
+): OutputValidation<PlanAgentConversationOutput> {
+  if (!value || typeof value !== 'object') {
+    return { success: false, errors: ['root: 必须返回对象'] };
+  }
+  const input = value as Record<string, unknown>;
+  if (input.kind === 'question') {
+    const question = typeof input.question === 'string' ? input.question.trim() : '';
+    if (!question) {
+      return { success: false, errors: ['question: 追问内容不能为空'] };
+    }
+    if (question.length > 1000) {
+      return { success: false, errors: ['question: 追问内容不能超过 1000 字'] };
+    }
+    return { success: true, data: { kind: 'question', question } };
+  }
+  if (input.kind === 'plan') {
+    if (!input.resolved_profile || typeof input.resolved_profile !== 'object') {
+      return {
+        success: false,
+        errors: ['resolved_profile: 生成计划时必须整理已确认的用户信息'],
+      };
+    }
+    const resolvedProfile = resolveConversationProfile(
+      context.profile,
+      input.resolved_profile,
+    );
+    const validated = validateAiPlan(
+      input.plan,
+      resolvedProfile,
+      context.exerciseMap,
+      forbiddenExerciseIds(resolvedProfile.injuries ?? []),
+      computeBaseline(resolvedProfile).tdee,
+    );
+    return validated.success
+      ? {
+          success: true,
+          data: { kind: 'plan', plan: validated.data, resolvedProfile },
+        }
+      : validated;
+  }
+  return { success: false, errors: ['kind: 必须是 question 或 plan'] };
+}
+
 function validateAiPlan(
   value: unknown,
   profile: UserProfile,
@@ -295,6 +548,36 @@ function validateAiPlan(
     tdee,
   });
   return hard.ok ? { success: true, data: parsed.data } : { success: false, errors: hard.errors };
+}
+
+async function preparePlanGenerationContext(): Promise<PlanGenerationContext> {
+  const db = getDb();
+  const profile = (await getProfile(db)) ?? {};
+  const exercises = await listExercises(db);
+  const exerciseMap = new Map(exercises.map((exercise) => [exercise.id, exercise]));
+  const forbidden = forbiddenExerciseIds(profile.injuries ?? []);
+  const available = availableExercises(profile, exercises, forbidden);
+  const trainingSummary = await buildTrainingSummary(4);
+  const weightTrend = await getWeightTrend();
+  const baseline = computeBaseline(profile, weightTrend);
+  return {
+    db,
+    profile,
+    exercises,
+    exerciseMap,
+    forbidden,
+    available,
+    trainingSummary,
+    baseline,
+  };
+}
+
+function hasExplicitEquipmentProfile(profile: UserProfile): boolean {
+  return (
+    profile.trainingLocation === 'bodyweight' ||
+    profile.equipment !== undefined ||
+    profile.gymEquipmentIds !== undefined
+  );
 }
 
 function availableExercises(
@@ -446,4 +729,123 @@ const PLAN_GENERATION_SYSTEM_PROMPT = `
 - 不在普通对话中粘贴计划 JSON，不提交残缺计划。
 
 示例原则：70kg 新手、每周 4 天增肌可采用上下肢分化；卧推约 30kg、深蹲约 35kg、硬拉约 40kg；双重递进 8-12 次；TDEE 2450 时可取约 2700kcal、蛋白约 140g。
+`.trim();
+
+const AI_PLAN_CONVERSATION_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['kind', 'question', 'plan', 'resolved_profile'],
+  properties: {
+    kind: { type: 'string', enum: ['question', 'plan'] },
+    question: {
+      anyOf: [{ type: 'string', minLength: 1, maxLength: 1000 }, { type: 'null' }],
+    },
+    plan: {
+      anyOf: [AI_PLAN_JSON_SCHEMA, { type: 'null' }],
+    },
+    resolved_profile: {
+      anyOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'sex',
+            'birth_year',
+            'height_cm',
+            'weight_kg',
+            'goal',
+            'experience',
+            'days_per_week',
+            'session_minutes',
+            'training_location',
+            'equipment',
+            'injuries',
+          ],
+          properties: {
+            sex: { anyOf: [{ type: 'string', enum: SEX_VALUES }, { type: 'null' }] },
+            birth_year: {
+              anyOf: [
+                {
+                  type: 'integer',
+                  minimum: new Date().getFullYear() - 100,
+                  maximum: new Date().getFullYear() - 12,
+                },
+                { type: 'null' },
+              ],
+            },
+            height_cm: {
+              anyOf: [
+                { type: 'number', minimum: 100, maximum: 250 },
+                { type: 'null' },
+              ],
+            },
+            weight_kg: {
+              anyOf: [
+                { type: 'number', minimum: 25, maximum: 350 },
+                { type: 'null' },
+              ],
+            },
+            goal: { anyOf: [{ type: 'string', enum: GOAL_VALUES }, { type: 'null' }] },
+            experience: {
+              anyOf: [{ type: 'string', enum: EXPERIENCE_VALUES }, { type: 'null' }],
+            },
+            days_per_week: {
+              anyOf: [{ type: 'integer', minimum: 1, maximum: 7 }, { type: 'null' }],
+            },
+            session_minutes: {
+              anyOf: [{ type: 'integer', minimum: 15, maximum: 240 }, { type: 'null' }],
+            },
+            training_location: {
+              anyOf: [
+                { type: 'string', enum: TRAINING_LOCATION_VALUES },
+                { type: 'null' },
+              ],
+            },
+            equipment: {
+              anyOf: [
+                {
+                  type: 'array',
+                  uniqueItems: true,
+                  items: { type: 'string', enum: EQUIPMENT_TYPES },
+                },
+                { type: 'null' },
+              ],
+            },
+            injuries: {
+              anyOf: [
+                {
+                  type: 'array',
+                  uniqueItems: true,
+                  items: { type: 'string', enum: INJURY_TAGS },
+                },
+                { type: 'null' },
+              ],
+            },
+          },
+        },
+        { type: 'null' },
+      ],
+    },
+  },
+};
+
+const PLAN_CONVERSATION_SYSTEM_PROMPT = `
+${PLAN_GENERATION_SYSTEM_PROMPT.replace(
+  '8. 最终必须调用 propose_plan 提交完整计划。该调用只生成待确认草案，不会修改用户数据。',
+  '8. 最终必须调用 respond_plan_generation 返回追问或完整计划。该调用不会修改用户数据。',
+).replace(
+  '- propose_plan 参数必须包含 plan 与 explanation，字段严格遵守工具 Schema。',
+  '- 生成计划时，plan 必须包含完整计划与 explanation，字段严格遵守工具 Schema。',
+)}
+
+交互式生成规则：
+1. 用户填写的所有资料都可能为空；空字段表示“未知”，不能擅自理解为“没有”。
+2. 先结合 user_request、user_profile 与 clarification_history 判断是否已足够制定安全且可执行的计划。
+3. 只在缺少会显著影响安全性或可执行性的必要信息时追问。每轮只问一个具体问题，不重复 history 中已经回答的问题。
+4. 可以保守推断的偏好不要反复追问；伤病、可用训练时间、训练条件等关键信息不清楚时优先询问。
+5. 每轮最终必须调用 respond_plan_generation：
+   - 需要追问：kind="question"，question 填最新问题，plan=null，resolved_profile=null。
+   - 可以生成：kind="plan"，question=null，plan 填完整且符合原计划 Schema 的对象；resolved_profile 将表单和问答中已经明确的信息整理为结构化档案。
+6. 不得在普通文本中输出问题或计划，不得同时返回问题和计划。
+7. resolved_profile 只能整理用户明确提供的信息，不得覆盖 user_profile 中已有值，也不得把未知信息编造成用户事实。所有未明确的字段填 null；用户明确表示没有器械或伤病时，equipment 或 injuries 才填空数组。
 `.trim();

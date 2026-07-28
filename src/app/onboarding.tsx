@@ -1,10 +1,17 @@
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 
-import { generatePlanProposal, recordPlanDecision } from '@/ai/agents/plan-generation';
+import {
+  generateInteractivePlanTurn,
+  generateTraditionalPlanProposal,
+  recordPlanDecision,
+  type GeneratedPlanProposal,
+  type PlanClarificationTurn,
+} from '@/ai/agents/plan-generation';
 import { loadAIConfig } from '@/ai/config';
 import { EquipmentSelector } from '@/components/equipment-selector';
+import { PlanClarificationCard } from '@/components/plan-clarification-card';
 import { ScreenContainer } from '@/components/screen-container';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Chip, ChipRow, Input, Row, SectionTitle } from '@/components/ui-kit';
@@ -21,6 +28,7 @@ import { getExercisesByIds } from '@/db/repositories/exercise-repo';
 import { activatePlan, createPlan } from '@/db/repositories/plan-repo';
 import type { UserProfile } from '@/db/repositories/profile-repo';
 import { useTheme } from '@/hooks/use-theme';
+import { getMissingTraditionalPlanRequirements } from '@/lib/plan-profile-requirements';
 import type { PlanValidationResult } from '@/lib/plan-validators';
 import { useAppStore } from '@/store/app-store';
 
@@ -65,10 +73,16 @@ export default function OnboardingScreen() {
   const [trainingLocation, setTrainingLocation] = useState<TrainingLocation>();
   const [gymEquipmentIds, setGymEquipmentIds] = useState<GymEquipmentId[]>([]);
   const [injuries, setInjuries] = useState<string[]>([]);
+  const [planRequest, setPlanRequest] = useState('');
+  const [clarificationHistory, setClarificationHistory] = useState<PlanClarificationTurn[]>([]);
+  const [clarificationQuestion, setClarificationQuestion] = useState('');
+  const [clarificationAnswer, setClarificationAnswer] = useState('');
   const [preview, setPreview] = useState<PlanValidationResult | null>(null);
   const [previewLogId, setPreviewLogId] = useState<string>();
+  const [previewResolvedProfile, setPreviewResolvedProfile] = useState<UserProfile>();
   const [generationNotice, setGenerationNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [generationMode, setGenerationMode] = useState<'traditional' | 'ai'>();
 
   const totalSteps = 5;
 
@@ -115,25 +129,107 @@ export default function OnboardingScreen() {
     }
   }
 
-  async function buildPreview() {
-    setBusy(true);
-    try {
-      await updateProfile(profile);
-      const generated = await generatePlanProposal(await loadAIConfig());
-      setPreview({
-        ok: true,
-        errors: [],
-        warnings: generated.warnings,
-        plan: generated.plan,
-      });
-      setPreviewLogId(generated.logId);
-      setGenerationNotice(
-        generated.fallbackReason ??
-          'AI 草案已通过动作、伤病、起始重量与营养范围四道本地校验。',
+  function showPreview(generated: GeneratedPlanProposal, notice: string) {
+    setPreview({
+      ok: true,
+      errors: [],
+      warnings: generated.warnings,
+      plan: generated.plan,
+    });
+    setPreviewLogId(generated.logId);
+    setPreviewResolvedProfile(generated.resolvedProfile);
+    setGenerationNotice(notice);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
+    setStep(totalSteps);
+  }
+
+  async function buildTraditionalPreview() {
+    const missing = getMissingTraditionalPlanRequirements(profile);
+    if (missing.length) {
+      Alert.alert(
+        '还缺少必要信息',
+        `传统生成需要：${missing.map((item) => item.label).join('、')}。AI 生成可以直接使用当前已填写的信息并继续追问。`,
       );
-      setStep(totalSteps);
+      setStep(missing[0].onboardingStep);
+      return;
+    }
+
+    setBusy(true);
+    setGenerationMode('traditional');
+    try {
+      await updateProfile({ ...profile, incomplete: false });
+      const generated = await generateTraditionalPlanProposal();
+      showPreview(
+        generated,
+        '传统计划已根据完整资料生成，并通过动作、伤病、起始重量与营养范围校验。',
+      );
+    } catch (error) {
+      Alert.alert(
+        '生成失败',
+        error instanceof Error ? error.message : '暂时无法生成传统计划',
+      );
     } finally {
       setBusy(false);
+      setGenerationMode(undefined);
+    }
+  }
+
+  async function runInteractiveTurn(history: PlanClarificationTurn[]): Promise<boolean> {
+    setBusy(true);
+    setGenerationMode('ai');
+    try {
+      await updateProfile(profile);
+      const result = await generateInteractivePlanTurn(await loadAIConfig(), {
+        userRequest: planRequest,
+        history,
+      });
+      if (result.kind === 'question') {
+        setClarificationQuestion(result.question);
+        setClarificationAnswer('');
+      } else {
+        showPreview(
+          result.proposal,
+          'AI 草案已结合全部表单信息和补充回答生成，并通过本地安全校验。',
+        );
+      }
+      return true;
+    } catch (error) {
+      Alert.alert(
+        'AI 生成失败',
+        error instanceof Error ? error.message : '暂时无法连接 AI 服务',
+      );
+      return false;
+    } finally {
+      setBusy(false);
+      setGenerationMode(undefined);
+    }
+  }
+
+  async function startInteractiveGeneration() {
+    setClarificationHistory([]);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
+    await runInteractiveTurn([]);
+  }
+
+  async function submitClarificationAnswer() {
+    const answer = clarificationAnswer.trim();
+    if (!clarificationQuestion || !answer || busy) return;
+    const previousHistory = clarificationHistory;
+    const previousQuestion = clarificationQuestion;
+    const nextHistory = [
+      ...previousHistory,
+      { question: previousQuestion, answer },
+    ];
+    setClarificationHistory(nextHistory);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
+    const accepted = await runInteractiveTurn(nextHistory);
+    if (!accepted) {
+      setClarificationHistory(previousHistory);
+      setClarificationQuestion(previousQuestion);
+      setClarificationAnswer(answer);
     }
   }
 
@@ -142,6 +238,13 @@ export default function OnboardingScreen() {
     setBusy(true);
     try {
       const db = getDb();
+      if (previewResolvedProfile) {
+        await updateProfile({
+          ...previewResolvedProfile,
+          incomplete:
+            getMissingTraditionalPlanRequirements(previewResolvedProfile).length > 0,
+        });
+      }
       const planId = await createPlan(db, preview.plan);
       await activatePlan(db, planId);
       await recordPlanDecision(previewLogId, 'accept');
@@ -164,7 +267,11 @@ export default function OnboardingScreen() {
     await recordPlanDecision(previewLogId, 'reject');
     setPreview(null);
     setPreviewLogId(undefined);
+    setPreviewResolvedProfile(undefined);
     setGenerationNotice('');
+    setClarificationHistory([]);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
     setStep(4);
   }
 
@@ -284,6 +391,32 @@ export default function OnboardingScreen() {
           <ThemedText type="small" themeColor="textSecondary" style={{ marginTop: Spacing.two }}>
             提示：Nexset 不提供医疗建议，如有持续疼痛请先就医。
           </ThemedText>
+
+          <SectionTitle>补充你的计划需求（可选）</SectionTitle>
+          <Input
+            value={planRequest}
+            onChangeText={setPlanRequest}
+            placeholder="例如：想提升引体向上，周三只能训练 45 分钟，周末更适合长时间训练"
+            multiline
+            maxLength={2000}
+            style={styles.planRequest}
+          />
+          <ThemedText
+            type="caption"
+            themeColor="textSecondary"
+            style={{ marginTop: Spacing.one }}>
+            AI 生成会读取这段描述；传统生成主要依据上面的结构化资料。
+          </ThemedText>
+
+          {clarificationQuestion ? (
+            <PlanClarificationCard
+              question={clarificationQuestion}
+              answer={clarificationAnswer}
+              onAnswerChange={setClarificationAnswer}
+              onSubmit={() => void submitClarificationAnswer()}
+              busy={busy}
+            />
+          ) : null}
         </View>
       )}
 
@@ -303,17 +436,27 @@ export default function OnboardingScreen() {
       <View style={styles.footer}>
         {step < totalSteps ? (
           <>
-            <Button
-              onPress={() => (step === totalSteps - 1 ? buildPreview() : setStep(step + 1))}
-              disabled={
-                step === 3 &&
-                (!trainingLocation ||
-                  ((trainingLocation === 'gym' || trainingLocation === 'home') &&
-                    gymEquipmentIds.length === 0))
-              }
-              loading={busy}>
-              {step === totalSteps - 1 ? '生成计划' : '下一步'}
-            </Button>
+            {step === totalSteps - 1 ? (
+              <Row style={styles.generationButtons}>
+                <Button
+                  variant="secondary"
+                  onPress={() => void buildTraditionalPreview()}
+                  disabled={busy}
+                  loading={busy && generationMode === 'traditional'}
+                  style={styles.generationButton}>
+                  传统生成
+                </Button>
+                <Button
+                  onPress={() => void startInteractiveGeneration()}
+                  disabled={busy}
+                  loading={busy && generationMode === 'ai'}
+                  style={styles.generationButton}>
+                  AI 生成
+                </Button>
+              </Row>
+            ) : (
+              <Button onPress={() => setStep(step + 1)}>下一步</Button>
+            )}
             <Row style={{ justifyContent: 'space-between', marginTop: Spacing.two }}>
               {step > 0 ? (
                 <Button variant="ghost" compact onPress={() => setStep(step - 1)}>
@@ -344,7 +487,7 @@ export default function OnboardingScreen() {
         )}
       </View>
       <ThemedText type="small" themeColor="textSecondary" style={{ marginTop: Spacing.three, color: theme.textSecondary }}>
-        配置 AI 后（「我的」→ AI 设置）会优先生成个性化 AI 计划；连接或校验失败时自动使用本地安全模板。
+        传统生成仅在本地根据完整资料创建模板；AI 生成可使用不完整资料并通过追问补齐关键信息。
       </ThemedText>
     </ScreenContainer>
   );
@@ -410,4 +553,7 @@ const styles = StyleSheet.create({
   footer: { marginTop: Spacing.four },
   equipmentSelector: { marginTop: Spacing.three },
   equipmentHint: { marginBottom: Spacing.three },
+  planRequest: { minHeight: 96, textAlignVertical: 'top' },
+  generationButtons: { alignItems: 'stretch' },
+  generationButton: { flex: 1 },
 });

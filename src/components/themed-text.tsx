@@ -37,7 +37,7 @@ export function ThemedText({ style, type = 'default', themeColor, ...rest }: The
         type === 'metric' && styles.metric,
         type === 'overline' && styles.overline,
         type === 'link' && styles.link,
-        type === 'linkPrimary' && styles.linkPrimary,
+        type === 'linkPrimary' && [styles.linkPrimary, { color: theme.chart1 }],
         type === 'code' && styles.code,
         style,
       ]}
@@ -106,7 +106,6 @@ const styles = StyleSheet.create({
   linkPrimary: {
     lineHeight: 30,
     fontSize: 14,
-    color: '#3c87f7',
   },
   code: {
     fontFamily: Fonts.mono,

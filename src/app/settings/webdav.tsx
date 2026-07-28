@@ -70,7 +70,7 @@ export default function WebDavSettingsScreen() {
         <View style={styles.flex}>
           <ThemedText type="subtitle">WebDAV 同步</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            连接你自己的加密 WebDAV 目录
+            连接你自己的 WebDAV 目录
           </ThemedText>
         </View>
       </Row>
@@ -99,13 +99,13 @@ export default function WebDavSettingsScreen() {
       <Input
         value={config.baseUrl}
         onChangeText={(baseUrl) => setConfig((current) => ({ ...current, baseUrl, connectedAt: 0 }))}
-        placeholder="https://dav.example.com/nexset/"
+        placeholder="http://192.168.1.20:5005/nexset/"
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
       />
       <ThemedText type="small" themeColor="textSecondary" style={styles.hint}>
-        为保护账号信息，只接受 HTTPS 地址。建议为 Nexset 创建独立目录。
+        支持 HTTP 与 HTTPS。HTTP 为明文传输，仅建议用于可信内网；公网请使用 HTTPS。
       </ThemedText>
 
       <SectionTitle>用户名</SectionTitle>

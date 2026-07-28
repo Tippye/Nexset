@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { useColorScheme, View } from 'react-native';
 
@@ -22,12 +23,15 @@ export default function RootLayout() {
       .finally(() => SplashScreen.hideAsync());
   }, [hydrate]);
 
+  const isDark = colorScheme === 'dark';
+
   if (!dbReady || !hydrated) {
-    return <View />;
+    return <View style={{ flex: 1, backgroundColor: isDark ? '#09090B' : '#FAFAFA' }} />;
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+    <ThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <WorkoutPlatformBridge />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
