@@ -7,6 +7,7 @@ import { ensureDeviceId } from '../oplog';
 import { addBodyMetric, getLatestMetric, getMetricHistory } from '../repositories/body-repo';
 import { addCardioLog, getCardioByDate } from '../repositories/cardio-repo';
 import { addChatMessage, createChatSession, getChatMessages } from '../repositories/chat-repo';
+import { createAgentLog, updateAgentDecision } from '../repositories/agent-log-repo';
 import {
   countExercises,
   createCustomExercise,
@@ -24,7 +25,7 @@ import {
   getSessionSets,
   startSession,
 } from '../repositories/workout-repo';
-import { exercises, syncOplog } from '../schema';
+import { agentLogs, exercises, syncOplog } from '../schema';
 import { createTestDb } from '../test-utils';
 import type { DB } from '../types';
 
@@ -38,6 +39,43 @@ describe('data layer (I-0.2)', () => {
   it('migrations apply and are idempotent', async () => {
     // createTestDb ran them; a second call over same handle is covered by user_version guard.
     expect(await countExercises(db)).toBe(0);
+  });
+
+  it('stores Provider routing and usage in agent audit logs', async () => {
+    const id = await createAgentLog(db, {
+      agent: 'PlanGenerationAgent',
+      promptVersion: 'test-v1',
+      validationResult: 'pass',
+      providerId: 'apple-foundation-models',
+      model: 'system-language-model-default',
+      routeReason: '优先使用可用的设备端模型',
+      fallbackHistory: [
+        {
+          providerId: 'apple-foundation-models',
+          providerKind: 'on_device',
+          model: 'system-language-model-default',
+          status: 'success',
+          reason: '设备端执行成功',
+        },
+      ],
+      inputTokens: 120,
+      outputTokens: 80,
+      toolRounds: 2,
+      privacyClass: 'cloud_allowed',
+    });
+    await updateAgentDecision(db, id, 'accept');
+
+    const [row] = await db.select().from(agentLogs).where(eq(agentLogs.id, id));
+    expect(row).toMatchObject({
+      providerId: 'apple-foundation-models',
+      model: 'system-language-model-default',
+      inputTokens: 120,
+      outputTokens: 80,
+      toolRounds: 2,
+      privacyClass: 'cloud_allowed',
+      userDecision: 'accept',
+    });
+    expect(JSON.parse(row.fallbackHistoryJson!)).toHaveLength(1);
   });
 
   it('device id is stable', async () => {

@@ -25,6 +25,11 @@ import {
 } from '@/lib/plan-schema';
 import { generateTemplatePlan } from '@/lib/plan-templates';
 import { validatePlanInput } from '@/lib/plan-validators';
+import {
+  createDefaultIntelligenceRouter,
+  defaultIntelligencePolicy,
+} from '@/intelligence/default-router';
+import { IntelligenceRoutingError, type IntelligenceRouter } from '@/intelligence/router';
 
 export const PLAN_AGENT_PROMPT_VERSION = 'plan-generation-v1';
 
@@ -32,6 +37,9 @@ export type GeneratedPlanProposal = {
   plan: PlanInput;
   warnings: string[];
   source: 'ai' | 'template';
+  providerId: string;
+  model?: string;
+  routeReason?: string;
   logId?: string;
   fallbackReason?: string;
 };
@@ -41,6 +49,7 @@ export async function generatePlanProposal(
   options: {
     userRequest?: string;
     complete?: AIComplete;
+    router?: IntelligenceRouter;
     onText?: (delta: string) => void;
     onProgress?: (message: string) => void;
   } = {},
@@ -54,15 +63,6 @@ export async function generatePlanProposal(
   const trainingSummary = await buildTrainingSummary(4);
   const weightTrend = await getWeightTrend();
   const baseline = computeBaseline(profile, weightTrend);
-
-  if (!config?.apiKey.trim() || !config.model.trim()) {
-    return templateFallback(
-      profile,
-      exerciseMap,
-      forbidden,
-      '尚未配置可用的 AI，已生成安全的本地模板计划。',
-    );
-  }
 
   const definition = buildDefinition({
     profile,
@@ -80,18 +80,24 @@ export async function generatePlanProposal(
     nutrition_baseline: baseline,
     exercise_library_summary: available.map(compactExercise),
   };
+  const policy = defaultIntelligencePolicy('plan_generation');
+  const router =
+    options.router ??
+    createDefaultIntelligenceRouter(config, { cloudComplete: options.complete });
 
   try {
-    const result = await runAgent(
-      config,
-      definition,
-      `以下是本次任务的可信本地状态。工具返回与这里的信息冲突时，以工具返回为准：\n${JSON.stringify(state)}`,
-      {
-        complete: options.complete,
-        onText: options.onText,
-        onProgress: options.onProgress,
-      },
+    const routed = await router.execute(policy, (provider) =>
+      runAgent(
+        provider,
+        definition,
+        `以下是本次任务的可信本地状态。工具返回与这里的信息冲突时，以工具返回为准：\n${JSON.stringify(state)}`,
+        {
+          onText: options.onText,
+          onProgress: options.onProgress,
+        },
+      ),
     );
+    const result = routed.result;
     const hard = validateAiPlan(result.data, profile, exerciseMap, forbidden, baseline.tdee);
     if (!hard.success) throw new Error(hard.errors.join('；'));
     const validated = validatePlanInput(toPlanInput(result.data, 'ai'), {
@@ -114,10 +120,27 @@ export async function generatePlanProposal(
       output: result.raw,
       validationResult: result.validationRetries ? 'retry_pass' : 'pass',
       latencyMs: result.latencyMs,
+      providerId: routed.provider.id,
+      model: routed.provider.model,
+      routeReason: routed.routeReason,
+      fallbackHistory: routed.attempts,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      toolRounds: result.rounds,
+      privacyClass: policy.privacyClass,
     });
-    return { plan: validated.plan, warnings: validated.warnings, source: 'ai', logId };
+    return {
+      plan: validated.plan,
+      warnings: validated.warnings,
+      source: 'ai',
+      providerId: routed.provider.id,
+      model: routed.provider.model,
+      routeReason: routed.routeReason,
+      logId,
+    };
   } catch (error) {
     const reason = humanizeGenerationError(error);
+    const attempts = error instanceof IntelligenceRoutingError ? error.attempts : [];
     await createAgentLog(db, {
       agent: 'PlanGenerationAgent',
       promptVersion: PLAN_AGENT_PROMPT_VERSION,
@@ -129,6 +152,9 @@ export async function generatePlanProposal(
       output: { error: reason },
       validationResult: 'fail',
       isBadcase: true,
+      routeReason: '所有模型 Provider 均不可用或执行失败，回退本地模板',
+      fallbackHistory: attempts,
+      privacyClass: policy.privacyClass,
     });
     return templateFallback(
       profile,
@@ -368,6 +394,8 @@ function templateFallback(
     plan: result.plan,
     warnings: result.warnings,
     source: 'template',
+    providerId: 'local-template',
+    routeReason: '确定性本地模板回退',
     fallbackReason,
   };
 }

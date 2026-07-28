@@ -231,6 +231,14 @@ export const agentLogs = sqliteTable(
     validationResult: text('validation_result'), // 'pass'|'retry_pass'|'fail'
     userDecision: text('user_decision'), // 'accept'|'partial'|'reject'|null
     latencyMs: integer('latency_ms'),
+    providerId: text('provider_id'),
+    model: text('model'),
+    routeReason: text('route_reason'),
+    fallbackHistoryJson: text('fallback_history_json'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    toolRounds: integer('tool_rounds'),
+    privacyClass: text('privacy_class'), // 'local_only'|'cloud_allowed'
     isBadcase: integer('is_badcase', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at').notNull(),
   },

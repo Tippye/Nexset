@@ -7,7 +7,8 @@ Nexset 是一个 Expo / React Native 跨平台健身计划与训练记录应用�
 - 引导问卷与本地安全模板计划。
 - 今日训练、逐组记录、休息计时、训练小结与历史记录。
 - 有氧、身体数据、动作库、自定义动作和训练统计。
-- OpenAI-compatible `/chat/completions` 与 Anthropic `/v1/messages`。
+- 统一 Intelligence Router：iOS 优先使用 Apple Intelligence 设备端模型，不可用或完整业务校验失败时自动回退自定义 LLM 服务。
+- OpenAI-compatible `/chat/completions` 与 Anthropic `/v1/messages` 云端适配器，并为未来 Android 设备端 Provider 保留统一能力契约。
 - 流式文本、工具调用、JSON 文本兼容模式、错误分类和连接检测。
 - PlanGenerationAgent：结构校验、动作 ID 校验、伤病禁忌、保守重量、TDEE 范围校验及失败降级。
 - AI 计划周视图、逐项编辑、确认启用和本地 Agent/Badcase 日志。
@@ -18,7 +19,7 @@ Nexset 是一个 Expo / React Native 跨平台健身计划与训练记录应用�
 - iOS 主屏训练组件、锁屏实时活动、常驻通知与灵动岛训练进度。
 - 快捷指令/App Intents、训练触感反馈、系统音频混音策略与 Apple Intelligence 本地预留层。
 
-真实模型对话的更开放问答仍需配置 API；WebDAV 属于后续阶段，界面中不会伪装为已完成。Apple 能力需要原生开发构建，不能在 Expo Go 中验证。
+真实模型对话的更开放问答仍需配置 API；WebDAV 属于后续阶段，界面中不会伪装为已完成。Apple 能力需要原生开发构建，不能在 Expo Go 中验证；检测不到 Apple Foundation Models 时会继续尝试已配置的自定义 LLM。
 
 ## 开发
 
@@ -50,7 +51,7 @@ Apple 原生签名、开发构建和真机验证步骤见 [Apple 生态接入说
 
 OpenAI 兼容地址会自动追加 `/chat/completions`，Anthropic 地址会自动追加 `/messages`。原生端 Key 使用系统安全存储；Web 端仅能在当前浏览器中做本地加密保存，仍应使用限额 Key，避免公共设备。
 
-生成计划时会向所配置的服务发送必要的档案、训练摘要、营养基线与动作约束。计划必须经用户确认后才写入数据库。
+生成计划时优先在支持的 Apple 设备端执行。只有设备端不可用或执行失败且任务允许云端时，才会向所配置的服务发送必要的档案、训练摘要、营养基线与动作约束。计划必须经用户确认后才写入数据库；Provider、模型、回退链、用量与用户决策会写入本地审计日志。
 
 ## 验证
 
@@ -70,6 +71,7 @@ npm run eval:intent
 ```text
 src/app/                 Expo Router 页面
 src/ai/                  Provider、配置、Agent Runtime 与 PlanGenerationAgent
+src/intelligence/        平台无关能力契约、路由策略与 Apple/云端 Provider 适配器
 src/components/          可复用 UI
 src/data/                内置动作库与伤病禁忌映射
 src/db/                  SQLite Schema、迁移与 repositories

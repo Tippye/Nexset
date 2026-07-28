@@ -41,5 +41,18 @@ export const MIGRATIONS: Migration[] = [
       "ALTER TABLE `user_profile` ADD `training_location` text;",
       "ALTER TABLE `user_profile` ADD `gym_equipment_json` text;"
     ]
+  },
+  {
+    "name": "0002_known_silver_surfer",
+    "statements": [
+      "ALTER TABLE `agent_logs` ADD `provider_id` text;",
+      "ALTER TABLE `agent_logs` ADD `model` text;",
+      "ALTER TABLE `agent_logs` ADD `route_reason` text;",
+      "ALTER TABLE `agent_logs` ADD `fallback_history_json` text;",
+      "ALTER TABLE `agent_logs` ADD `input_tokens` integer;",
+      "ALTER TABLE `agent_logs` ADD `output_tokens` integer;",
+      "ALTER TABLE `agent_logs` ADD `tool_rounds` integer;",
+      "ALTER TABLE `agent_logs` ADD `privacy_class` text;"
+    ]
   }
 ];

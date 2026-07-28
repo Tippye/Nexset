@@ -1,6 +1,10 @@
 import { eq } from 'drizzle-orm';
 
 import { newId } from '@/lib/id';
+import type {
+  IntelligencePrivacyClass,
+  IntelligenceRouteAttempt,
+} from '@/intelligence/types';
 
 import { agentLogs } from '../schema';
 import type { DB } from '../types';
@@ -17,6 +21,14 @@ export async function createAgentLog(
     output?: unknown;
     validationResult: AgentValidationResult;
     latencyMs?: number;
+    providerId?: string;
+    model?: string;
+    routeReason?: string;
+    fallbackHistory?: IntelligenceRouteAttempt[];
+    inputTokens?: number;
+    outputTokens?: number;
+    toolRounds?: number;
+    privacyClass?: IntelligencePrivacyClass;
     isBadcase?: boolean;
   },
 ): Promise<string> {
@@ -30,6 +42,16 @@ export async function createAgentLog(
     validationResult: input.validationResult,
     userDecision: null,
     latencyMs: input.latencyMs ?? null,
+    providerId: input.providerId ?? null,
+    model: input.model ?? null,
+    routeReason: input.routeReason ?? null,
+    fallbackHistoryJson: input.fallbackHistory?.length
+      ? JSON.stringify(input.fallbackHistory)
+      : null,
+    inputTokens: input.inputTokens ?? null,
+    outputTokens: input.outputTokens ?? null,
+    toolRounds: input.toolRounds ?? null,
+    privacyClass: input.privacyClass ?? null,
     isBadcase: input.isBadcase ?? false,
     createdAt: Date.now(),
   });

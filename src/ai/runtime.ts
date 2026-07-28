@@ -1,13 +1,13 @@
 import type { z } from 'zod';
 
+import type { IntelligenceProviderSession } from '@/intelligence/types';
+
 import { extractJsonValue } from './json';
-import { completeAI } from './provider';
 import {
-  type AIComplete,
-  type AIConfig,
   type AIMessage,
   type AIResponse,
   type AIToolDefinition,
+  type AIUsage,
 } from './types';
 
 export type AgentTool = AIToolDefinition &
@@ -38,6 +38,7 @@ export type AgentRunResult<T> = {
   latencyMs: number;
   validationRetries: number;
   rounds: number;
+  usage?: AIUsage;
 };
 
 export class AgentValidationError extends Error {
@@ -48,21 +49,20 @@ export class AgentValidationError extends Error {
 }
 
 export async function runAgent<T>(
-  config: AIConfig,
+  provider: IntelligenceProviderSession,
   definition: AgentDefinition<T>,
   input: string,
   options: {
-    complete?: AIComplete;
     onText?: (delta: string) => void;
     onProgress?: (message: string) => void;
   } = {},
 ): Promise<AgentRunResult<T>> {
   const started = Date.now();
-  const complete = options.complete ?? completeAI;
-  const toolMode = config.supportsTools !== false;
+  const toolMode = provider.capabilities.tool_calling;
   const maxRounds = definition.maxToolRounds ?? 8;
   const maxValidationRetries = definition.maxValidationRetries ?? 2;
   let validationRetries = 0;
+  let usage: AIUsage | undefined;
   const messages: AIMessage[] = [
     {
       role: 'system',
@@ -78,7 +78,7 @@ export async function runAgent<T>(
   for (let round = 1; round <= maxRounds; round++) {
     options.onProgress?.(round === 1 ? '正在读取档案与动作约束…' : '正在校验并完善计划…');
     let streamed = '';
-    const response = await complete(config, {
+    const response = await provider.complete({
       messages: [...messages],
       tools: toolMode ? definition.tools : undefined,
       toolChoice: toolMode ? 'auto' : undefined,
@@ -91,6 +91,7 @@ export async function runAgent<T>(
           }
         : undefined,
     });
+    usage = addUsage(usage, response.usage);
     const assistant = responseToMessage(response, streamed);
     messages.push(assistant);
 
@@ -126,6 +127,7 @@ export async function runAgent<T>(
             latencyMs: Date.now() - started,
             validationRetries,
             rounds: round,
+            usage,
           };
         }
         validationRetries += 1;
@@ -149,6 +151,7 @@ export async function runAgent<T>(
             latencyMs: Date.now() - started,
             validationRetries,
             rounds: round,
+            usage,
           };
         }
         validationRetries += 1;
@@ -170,6 +173,14 @@ export async function runAgent<T>(
     });
   }
   throw new AgentValidationError(['工具调用轮次超过上限']);
+}
+
+function addUsage(current: AIUsage | undefined, next: AIUsage | undefined): AIUsage | undefined {
+  if (!current && !next) return undefined;
+  return {
+    inputTokens: (current?.inputTokens ?? 0) + (next?.inputTokens ?? 0) || undefined,
+    outputTokens: (current?.outputTokens ?? 0) + (next?.outputTokens ?? 0) || undefined,
+  };
 }
 
 export function zodOutputValidator<T>(schema: z.ZodType<T>): (value: unknown) => OutputValidation<T> {

@@ -8,7 +8,7 @@ import {
   recordAdjustmentDecision,
   type DailyAdjustmentResult,
 } from '@/ai/agents/daily-adjustment';
-import { isAIConfigured, loadAIConfig } from '@/ai/config';
+import { loadAIConfig } from '@/ai/config';
 import type { AIConfig } from '@/ai/types';
 import { Spacing } from '@/constants/theme';
 import { getDb } from '@/db/client';
@@ -17,6 +17,8 @@ import { getSetting, setSetting } from '@/db/repositories/settings-repo';
 import { useTheme } from '@/hooks/use-theme';
 import { getCurrentDeviationReport, type DeviationReport } from '@/lib/deviation';
 import type { PlanChange } from '@/lib/plan-diff';
+import { getDefaultIntelligenceStatus } from '@/intelligence/default-router';
+import type { IntelligenceStatus } from '@/intelligence/types';
 
 import { ThemedText } from './themed-text';
 import { Button, Card, Input, Row, SectionTitle } from './ui-kit';
@@ -32,6 +34,7 @@ export function DailyAdjustmentCard({
 }) {
   const theme = useTheme();
   const [config, setConfig] = useState<AIConfig | null>(null);
+  const [intelligenceStatus, setIntelligenceStatus] = useState<IntelligenceStatus | null>(null);
   const [report, setReport] = useState<DeviationReport | null>(null);
   const [result, setResult] = useState<DailyAdjustmentResult | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -42,16 +45,19 @@ export function DailyAdjustmentCard({
 
   useEffect(() => {
     let alive = true;
-    void Promise.all([
-      loadAIConfig(),
-      getCurrentDeviationReport(getDb(), plan, 7),
-      getSetting<number>(getDb(), IGNORE_KEY),
-    ]).then(([nextConfig, nextReport, ignoredUntil]) => {
+    void (async () => {
+      const nextConfig = await loadAIConfig();
+      const [nextStatus, nextReport, ignoredUntil] = await Promise.all([
+        getDefaultIntelligenceStatus(nextConfig, 'daily_adjustment'),
+        getCurrentDeviationReport(getDb(), plan, 7),
+        getSetting<number>(getDb(), IGNORE_KEY),
+      ]);
       if (!alive) return;
       setConfig(nextConfig);
+      setIntelligenceStatus(nextStatus);
       setReport(nextReport);
       if ((ignoredUntil ?? 0) > Date.now()) setDismissed(true);
-    });
+    })();
     return () => {
       alive = false;
     };
@@ -142,9 +148,9 @@ export function DailyAdjustmentCard({
                 Nex 判断当前不需要调整，继续按原计划训练即可。
               </ThemedText>
             ) : null}
-            {isAIConfigured(config) ? (
+            {intelligenceStatus?.available ? (
               <Button onPress={generate} loading={busy}>
-                获取最小调整建议
+                使用{intelligenceStatus.providerName}获取最小调整建议
               </Button>
             ) : (
               <Button variant="secondary" onPress={() => router.push('/settings/ai')}>

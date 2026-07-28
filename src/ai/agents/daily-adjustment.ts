@@ -25,6 +25,11 @@ import {
   getCurrentDeviationReport,
   type DeviationReport,
 } from '@/lib/deviation';
+import {
+  createDefaultIntelligenceRouter,
+  defaultIntelligencePolicy,
+} from '@/intelligence/default-router';
+import { IntelligenceRoutingError, type IntelligenceRouter } from '@/intelligence/router';
 
 export const DAILY_ADJUST_PROMPT_VERSION = 'daily-adjust-v1';
 
@@ -32,6 +37,9 @@ export type DailyAdjustmentResult = {
   report: DeviationReport;
   proposal: AdjustmentProposal | null;
   warnings: string[];
+  providerId?: string;
+  model?: string;
+  routeReason?: string;
   logId?: string;
   fallbackReason?: string;
 };
@@ -42,6 +50,7 @@ export async function generateDailyAdjustment(
   options: {
     subjectiveFeedback?: string;
     complete?: AIComplete;
+    router?: IntelligenceRouter;
     onText?: (delta: string) => void;
     onProgress?: (message: string) => void;
   } = {},
@@ -49,14 +58,6 @@ export async function generateDailyAdjustment(
   const db = getDb();
   const report = await getCurrentDeviationReport(db, plan, 7);
   if (!report.shouldTriggerAgent) return { report, proposal: null, warnings: [] };
-  if (!config?.apiKey.trim() || !config.model.trim()) {
-    return {
-      report,
-      proposal: null,
-      warnings: [],
-      fallbackReason: 'AI 未配置，先展示本地偏差数据；不会自动修改计划。',
-    };
-  }
   const profile = (await getProfile(db)) ?? {};
   const exercises = await listExercises(db);
   const exerciseMap = new Map(exercises.map((exercise) => [exercise.id, exercise]));
@@ -64,21 +65,27 @@ export async function generateDailyAdjustment(
   const tdee = computeBaseline(profile, report.weightTrendKgPerWeek).tdee;
   const definition = buildDefinition(plan, report, exerciseMap, forbidden, tdee);
   const started = Date.now();
+  const policy = defaultIntelligencePolicy('daily_adjustment');
+  const router =
+    options.router ??
+    createDefaultIntelligenceRouter(config, { cloudComplete: options.complete });
   try {
-    const result = await runAgent(
-      config,
-      definition,
-      JSON.stringify({
-        current_plan: compactPlan(plan),
-        deviation_report: report,
-        subjective_feedback: options.subjectiveFeedback ?? null,
-      }),
-      {
-        complete: options.complete,
-        onText: options.onText,
-        onProgress: options.onProgress,
-      },
+    const routed = await router.execute(policy, (provider) =>
+      runAgent(
+        provider,
+        definition,
+        JSON.stringify({
+          current_plan: compactPlan(plan),
+          deviation_report: report,
+          subjective_feedback: options.subjectiveFeedback ?? null,
+        }),
+        {
+          onText: options.onText,
+          onProgress: options.onProgress,
+        },
+      ),
     );
+    const result = routed.result;
     const diff = result.data.adjustment
       ? dryRunPlanDiff(plan, result.data.adjustment.changes, {
           exercises: exerciseMap,
@@ -97,15 +104,27 @@ export async function generateDailyAdjustment(
       output: result.raw,
       validationResult: result.validationRetries ? 'retry_pass' : 'pass',
       latencyMs: result.latencyMs,
+      providerId: routed.provider.id,
+      model: routed.provider.model,
+      routeReason: routed.routeReason,
+      fallbackHistory: routed.attempts,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      toolRounds: result.rounds,
+      privacyClass: policy.privacyClass,
     });
     return {
       report,
       proposal: result.data.adjustment ? result.data : null,
       warnings: diff?.warnings ?? [],
+      providerId: routed.provider.id,
+      model: routed.provider.model,
+      routeReason: routed.routeReason,
       logId,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
+    const attempts = error instanceof IntelligenceRoutingError ? error.attempts : [];
     await createAgentLog(db, {
       agent: 'DailyAdjustAgent',
       promptVersion: DAILY_ADJUST_PROMPT_VERSION,
@@ -114,6 +133,9 @@ export async function generateDailyAdjustment(
       validationResult: 'fail',
       latencyMs: Date.now() - started,
       isBadcase: true,
+      routeReason: '所有模型 Provider 均不可用或执行失败',
+      fallbackHistory: attempts,
+      privacyClass: policy.privacyClass,
     });
     return {
       report,

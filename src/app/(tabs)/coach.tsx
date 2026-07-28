@@ -3,13 +3,15 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 
-import { isAIConfigured, loadAIConfig } from '@/ai/config';
+import { loadAIConfig } from '@/ai/config';
 import {
   generatePlanProposal,
   recordPlanDecision,
   type GeneratedPlanProposal,
 } from '@/ai/agents/plan-generation';
 import type { AIConfig } from '@/ai/types';
+import { getDefaultIntelligenceStatus } from '@/intelligence/default-router';
+import type { IntelligenceStatus } from '@/intelligence/types';
 import { IconButton, PageHeader, StatusBadge } from '@/components/dashboard-ui';
 import { ScreenContainer } from '@/components/screen-container';
 import { CoachChatPanel } from '@/components/coach-chat-panel';
@@ -38,6 +40,7 @@ export default function CoachScreen() {
   const activePlan = useAppStore((state) => state.activePlan);
   const refreshPlan = useAppStore((state) => state.refreshPlan);
   const [config, setConfig] = useState<AIConfig | null>(null);
+  const [intelligenceStatus, setIntelligenceStatus] = useState<IntelligenceStatus | null>(null);
   const [request, setRequest] = useState('');
   const [proposal, setProposal] = useState<GeneratedPlanProposal | null>(null);
   const [draft, setDraft] = useState<PlanInput | null>(null);
@@ -50,7 +53,16 @@ export default function CoachScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadAIConfig().then(setConfig);
+      let alive = true;
+      void loadAIConfig().then(async (nextConfig) => {
+        const nextStatus = await getDefaultIntelligenceStatus(nextConfig, 'plan_generation');
+        if (!alive) return;
+        setConfig(nextConfig);
+        setIntelligenceStatus(nextStatus);
+      });
+      return () => {
+        alive = false;
+      };
     }, []),
   );
 
@@ -136,7 +148,8 @@ export default function CoachScreen() {
     setEditing(false);
   }
 
-  const configured = isAIConfigured(config);
+  const configured = intelligenceStatus?.available ?? false;
+  const providerLabel = intelligenceStatus?.providerName ?? '本地安全模板';
 
   return (
     <ScreenContainer>
@@ -169,7 +182,9 @@ export default function CoachScreen() {
           <View style={styles.flex}>
             <Row style={styles.aiTitleRow}>
               <ThemedText type="smallBold" style={styles.flex}>
-                {configured ? `${config.model} 已配置` : '本地安全模板'}
+                {configured
+                  ? `${providerLabel}${intelligenceStatus?.model ? ` · ${intelligenceStatus.model}` : ''}`
+                  : '本地安全模板'}
               </ThemedText>
               <StatusBadge tone={configured ? 'purple' : 'amber'}>
                 {configured ? 'AI 在线' : '本地模式'}
@@ -177,10 +192,10 @@ export default function CoachScreen() {
             </Row>
             <ThemedText type="small" themeColor="textSecondary">
               {configured
-                ? config.supportsTools === false
-                  ? '模型将使用 JSON 文本兼容模式，结果仍由本地硬校验兜底。'
-                  : '可生成个性化计划；模型异常或校验失败会自动降级。'
-                : '配置 API 后可结合训练历史生成更个性化的计划。'}
+                ? intelligenceStatus?.providerId === 'apple-foundation-models'
+                  ? '优先在设备端生成；执行失败会自动切换自定义云端，结果仍由本地硬校验兜底。'
+                  : 'Apple 设备端不可用时使用自定义云端；模型异常或校验失败会自动降级。'
+                : '当前没有可用模型，将生成不出设备的安全本地模板；也可配置自定义 LLM 服务。'}
             </ThemedText>
           </View>
         </Row>
@@ -209,7 +224,7 @@ export default function CoachScreen() {
       />
       <View style={styles.buttonGap} />
       <Button onPress={generate} loading={busy}>
-        {configured ? '生成个性化 AI 计划' : '生成安全模板计划'}
+        {configured ? `使用${providerLabel}生成计划` : '生成安全模板计划'}
       </Button>
 
       {busy ? (
@@ -304,7 +319,7 @@ function PlanProposalCard({
           </View>
           <View style={[styles.badge, { backgroundColor: theme.accentSoft }]}>
             <ThemedText type="small" style={{ color: theme.accent }}>
-              {proposal.source === 'ai' ? 'AI 草案' : '本地模板'}
+              {proposalProviderLabel(proposal)}
             </ThemedText>
           </View>
         </Row>
@@ -469,6 +484,12 @@ function clonePlan(plan: PlanInput): PlanInput {
 
 function intensityLabel(intensity: string): string {
   return intensity === 'high' ? '高强度' : intensity === 'moderate' ? '中等强度' : '低强度';
+}
+
+function proposalProviderLabel(proposal: GeneratedPlanProposal): string {
+  if (proposal.providerId === 'apple-foundation-models') return 'Apple 设备端草案';
+  if (proposal.providerId === 'custom-cloud') return '自定义 LLM 草案';
+  return '本地模板';
 }
 
 const styles = StyleSheet.create({
