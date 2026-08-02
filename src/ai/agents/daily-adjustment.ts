@@ -29,7 +29,14 @@ import {
   createDefaultIntelligenceRouter,
   defaultIntelligencePolicy,
 } from '@/intelligence/default-router';
+import { loadLocalModelConfig } from '@/intelligence/local-model-config';
+import { estimateCostUsdMicros, executionWasDegraded } from '@/intelligence/metrics';
 import { IntelligenceRoutingError, type IntelligenceRouter } from '@/intelligence/router';
+import type {
+  IntelligenceProviderSession,
+  IntelligenceRouteAttempt,
+  IntelligenceRouteMode,
+} from '@/intelligence/types';
 
 export const DAILY_ADJUST_PROMPT_VERSION = 'daily-adjust-v1';
 
@@ -66,9 +73,16 @@ export async function generateDailyAdjustment(
   const definition = buildDefinition(plan, report, exerciseMap, forbidden, tdee);
   const started = Date.now();
   const policy = defaultIntelligencePolicy('daily_adjustment');
+  const localModelConfig = options.router ? null : await loadLocalModelConfig();
   const router =
     options.router ??
-    createDefaultIntelligenceRouter(config, { cloudComplete: options.complete });
+    createDefaultIntelligenceRouter(config, {
+      cloudComplete: options.complete,
+      localModelConfig,
+    });
+  let completedAttempts: IntelligenceRouteAttempt[] = [];
+  let completedProvider: IntelligenceProviderSession | undefined;
+  let completedRouteMode: IntelligenceRouteMode = 'single';
   try {
     const routed = await router.execute(policy, (provider) =>
       runAgent(
@@ -85,6 +99,9 @@ export async function generateDailyAdjustment(
         },
       ),
     );
+    completedAttempts = routed.attempts;
+    completedProvider = routed.provider;
+    completedRouteMode = routed.routeMode;
     const result = routed.result;
     const diff = result.data.adjustment
       ? dryRunPlanDiff(plan, result.data.adjustment.changes, {
@@ -105,13 +122,17 @@ export async function generateDailyAdjustment(
       validationResult: result.validationRetries ? 'retry_pass' : 'pass',
       latencyMs: result.latencyMs,
       providerId: routed.provider.id,
+      providerKind: routed.provider.kind,
       model: routed.provider.model,
       routeReason: routed.routeReason,
+      routeMode: routed.routeMode,
       fallbackHistory: routed.attempts,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       toolRounds: result.rounds,
       privacyClass: policy.privacyClass,
+      estimatedCostUsdMicros: estimateCostUsdMicros(result.usage, routed.provider.pricing),
+      degraded: executionWasDegraded(routed),
     });
     return {
       report,
@@ -124,7 +145,9 @@ export async function generateDailyAdjustment(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
-    const attempts = error instanceof IntelligenceRoutingError ? error.attempts : [];
+    const attempts =
+      error instanceof IntelligenceRoutingError ? error.attempts : completedAttempts;
+    const lastAttempt = attempts.at(-1);
     await createAgentLog(db, {
       agent: 'DailyAdjustAgent',
       promptVersion: DAILY_ADJUST_PROMPT_VERSION,
@@ -132,8 +155,14 @@ export async function generateDailyAdjustment(
       output: { error: message },
       validationResult: 'fail',
       latencyMs: Date.now() - started,
+      providerId: completedProvider?.id ?? lastAttempt?.providerId,
+      providerKind: completedProvider?.kind ?? lastAttempt?.providerKind,
+      model: completedProvider?.model ?? lastAttempt?.model,
       isBadcase: true,
       routeReason: '所有模型 Provider 均不可用或执行失败',
+      routeMode:
+        error instanceof IntelligenceRoutingError ? error.routeMode : completedRouteMode,
+      degraded: true,
       fallbackHistory: attempts,
       privacyClass: policy.privacyClass,
     });

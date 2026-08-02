@@ -14,7 +14,14 @@ export type IntelligenceCapability =
   | 'tool_calling'
   | 'streaming';
 
-export type IntelligenceProviderKind = 'on_device' | 'cloud';
+export type IntelligenceProviderKind = 'on_device' | 'cloud' | 'template';
+
+export type IntelligenceRouteMode = 'single' | 'cascade' | 'system' | 'template';
+
+export type IntelligenceTokenPricing = {
+  inputPerMillionUsd: number;
+  outputPerMillionUsd: number;
+};
 
 export type IntelligenceProviderCapabilities = Record<IntelligenceCapability, boolean>;
 
@@ -30,6 +37,7 @@ export type IntelligenceProvider = {
   priority: number;
   model: string;
   capabilities: IntelligenceProviderCapabilities;
+  pricing?: IntelligenceTokenPricing;
   availability: () => Promise<IntelligenceProviderAvailability>;
   complete: (request: AIRequest) => Promise<AIResponse>;
 };
@@ -52,13 +60,14 @@ export type IntelligenceRouteAttempt = {
 export type IntelligenceProviderSession = Pick<
   IntelligenceProvider,
   'id' | 'displayName' | 'kind' | 'model' | 'capabilities' | 'complete'
->;
+> & { pricing?: IntelligenceTokenPricing };
 
 export type IntelligenceExecution<T> = {
   result: T;
   provider: IntelligenceProviderSession;
   attempts: IntelligenceRouteAttempt[];
   routeReason: string;
+  routeMode: IntelligenceRouteMode;
 };
 
 export type IntelligenceStatus = {
@@ -68,4 +77,5 @@ export type IntelligenceStatus = {
   model?: string;
   reason: string;
   attempts: IntelligenceRouteAttempt[];
+  routeMode: IntelligenceRouteMode;
 };

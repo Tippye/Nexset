@@ -102,7 +102,17 @@
         }
       ],
       "./plugins/with-http-cleartext",
-      "@bacons/apple-targets"
+      "@bacons/apple-targets",
+      "expo-build-properties",
+      [
+        "llama.rn",
+        {
+          "enableEntitlements": true,
+          "entitlementsProfile": "production",
+          "forceCxx20": true,
+          "enableOpenCLAndHexagon": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

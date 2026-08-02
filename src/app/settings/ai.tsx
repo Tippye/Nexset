@@ -15,20 +15,38 @@ import { ScreenContainer } from '@/components/screen-container';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Chip, ChipRow, Input, Row, SectionTitle } from '@/components/ui-kit';
 import { Spacing } from '@/constants/theme';
+import { getDb } from '@/db/client';
+import {
+  getIntelligenceMetrics,
+  type IntelligenceMetric,
+} from '@/db/repositories/intelligence-metrics-repo';
 import { useTheme } from '@/hooks/use-theme';
+import {
+  defaultLocalModelConfig,
+  isLocalModelConfigured,
+  loadLocalModelConfig,
+  saveLocalModelConfig,
+  type LocalModelConfig,
+  type LocalModelId,
+  type LocalModelQuantization,
+} from '@/intelligence/local-model-config';
 
 export default function AISettingsScreen() {
   const theme = useTheme();
   const [config, setConfig] = useState<AIConfig>(defaultAIConfig());
+  const [localConfig, setLocalConfig] = useState<LocalModelConfig>(defaultLocalModelConfig());
+  const [metrics, setMetrics] = useState<IntelligenceMetric[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [latency, setLatency] = useState<number | null>(null);
 
   useEffect(() => {
-    loadAIConfig()
-      .then((stored) => {
+    Promise.all([loadAIConfig(), loadLocalModelConfig(), getIntelligenceMetrics(getDb())])
+      .then(([stored, local, nextMetrics]) => {
         if (stored) setConfig(stored);
+        setLocalConfig(local);
+        setMetrics(nextMetrics);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -44,14 +62,19 @@ export default function AISettingsScreen() {
   }
 
   async function save() {
-    if (!validConfig(config)) {
-      Alert.alert('配置不完整', '请填写 HTTPS Base URL、API Key 和模型名。');
+    if (!validConfig(config) && !isLocalModelConfigured(localConfig)) {
+      Alert.alert('配置不完整', '请至少配置一个有效的端侧 GGUF 模型或云端 API 模型。');
       return;
     }
     setSaving(true);
     try {
-      await saveAIConfig(config);
-      Alert.alert('已保存', 'API Key 不会写入 Nexset 数据库或同步记录。');
+      await Promise.all([saveAIConfig(config), saveLocalModelConfig(localConfig)]);
+      Alert.alert(
+        '已保存',
+        validConfig(config) && isLocalModelConfigured(localConfig)
+          ? '已启用端侧优先、云端降级的大小模型协同。'
+          : '当前为单模型模式，所有 AI 任务统一使用已配置的模型。',
+      );
     } finally {
       setSaving(false);
     }
@@ -162,6 +185,74 @@ export default function AISettingsScreen() {
         </ThemedText>
       )}
 
+      <SectionTitle>云端估算价格（美元 / 百万 Token）</SectionTitle>
+      <Row style={styles.priceRow}>
+        <View style={styles.flex}>
+          <Input
+            value={String(config.inputCostPerMillion ?? 0)}
+            onChangeText={(value) =>
+              setConfig((current) => ({ ...current, inputCostPerMillion: numeric(value) }))
+            }
+            placeholder="输入价格"
+            keyboardType="decimal-pad"
+          />
+        </View>
+        <View style={styles.flex}>
+          <Input
+            value={String(config.outputCostPerMillion ?? 0)}
+            onChangeText={(value) =>
+              setConfig((current) => ({ ...current, outputCostPerMillion: numeric(value) }))
+            }
+            placeholder="输出价格"
+            keyboardType="decimal-pad"
+          />
+        </View>
+      </Row>
+
+      <SectionTitle>端侧 GGUF 模型</SectionTitle>
+      <ChipRow>
+        <Chip
+          label="启用"
+          selected={localConfig.enabled}
+          onPress={() => setLocalConfig((current) => ({ ...current, enabled: true }))}
+        />
+        <Chip
+          label="停用"
+          selected={!localConfig.enabled}
+          onPress={() => setLocalConfig((current) => ({ ...current, enabled: false }))}
+        />
+      </ChipRow>
+      <ChipRow>
+        {(['minicpm5-1b', 'qwen3.5-4b'] as LocalModelId[]).map((modelId) => (
+          <Chip
+            key={modelId}
+            label={modelId === 'minicpm5-1b' ? 'MiniCPM5-1B' : 'Qwen3.5-4B'}
+            selected={localConfig.modelId === modelId}
+            onPress={() => setLocalConfig((current) => ({ ...current, modelId }))}
+          />
+        ))}
+      </ChipRow>
+      <ChipRow>
+        {(['Q4_K_M', 'Q5_K_M', 'custom'] as LocalModelQuantization[]).map((quantization) => (
+          <Chip
+            key={quantization}
+            label={quantization === 'custom' ? '自定义量化' : quantization}
+            selected={localConfig.quantization === quantization}
+            onPress={() => setLocalConfig((current) => ({ ...current, quantization }))}
+          />
+        ))}
+      </ChipRow>
+      <Input
+        value={localConfig.modelPath}
+        onChangeText={(modelPath) => setLocalConfig((current) => ({ ...current, modelPath }))}
+        placeholder="file:///…/model.gguf"
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      <ThemedText type="small" themeColor="textSecondary" style={styles.hint}>
+        MiniCPM5-1B Q4_K_M 适合多数手机；Qwen3.5-4B 需要更高内存。模型文件只保存在设备，不参与 WebDAV 同步。
+      </ThemedText>
+
       <SectionTitle>能力状态</SectionTitle>
       <Card>
         <Row style={styles.statusRow}>
@@ -203,8 +294,27 @@ export default function AISettingsScreen() {
       </Button>
       <View style={styles.gap} />
       <Button variant="secondary" onPress={save} loading={saving} disabled={loading || testing}>
-        保存配置
+        保存全部模型配置
       </Button>
+
+      <SectionTitle>近 30 天模型质量</SectionTitle>
+      {metrics.length ? (
+        metrics.map((metric) => (
+          <Card key={`${metric.providerKind}:${metric.providerId}`} style={styles.metricCard}>
+            <ThemedText type="smallBold">{metricLabel(metric)}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.hint}>
+              平均 {metric.averageLatencyMs}ms · P50 {metric.p50LatencyMs}ms · P95 {metric.p95LatencyMs}ms
+              {'\n'}通过率 {percent(metric.passRate)} · 成本 ${metric.estimatedCostUsd.toFixed(4)} · 降级率 {percent(metric.degradationRate)}
+            </ThemedText>
+          </Card>
+        ))
+      ) : (
+        <Card>
+          <ThemedText type="small" themeColor="textSecondary">
+            暂无执行数据。完成一次计划生成或每日调整后会显示统计。
+          </ThemedText>
+        </Card>
+      )}
 
       <Card style={styles.privacyCard}>
         <ThemedText type="smallBold">发送给模型的数据</ThemedText>
@@ -224,6 +334,27 @@ function validConfig(config: AIConfig): boolean {
   );
 }
 
+function numeric(value: string): number {
+  const parsed = Number(value.replace(',', '.'));
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 1000) / 10}%`;
+}
+
+function metricLabel(metric: IntelligenceMetric): string {
+  const kind =
+    metric.providerKind === 'on_device'
+      ? '端侧模型'
+      : metric.providerKind === 'cloud'
+        ? '云端模型'
+        : metric.providerKind === 'template'
+          ? '本地模板'
+          : '未知模型';
+  return `${kind} · ${metric.providerId} · ${metric.runs} 次`;
+}
+
 const styles = StyleSheet.create({
   header: { marginBottom: Spacing.three },
   back: {
@@ -237,5 +368,7 @@ const styles = StyleSheet.create({
   statusRow: { alignItems: 'flex-start' },
   flex: { flex: 1 },
   gap: { height: Spacing.two },
+  priceRow: { gap: Spacing.two },
+  metricCard: { marginBottom: Spacing.two },
   privacyCard: { marginTop: Spacing.four },
 });

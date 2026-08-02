@@ -57,6 +57,9 @@ export async function logOp(
     payloadJson: payload === undefined ? null : JSON.stringify(payload),
     ts: Date.now(),
     synced: false,
+    attemptCount: 0,
+    nextAttemptAt: 0,
+    lastError: null,
   });
 }
 

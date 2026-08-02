@@ -8,6 +8,7 @@ import { addBodyMetric, getLatestMetric, getMetricHistory } from '../repositorie
 import { addCardioLog, getCardioByDate } from '../repositories/cardio-repo';
 import { addChatMessage, createChatSession, getChatMessages } from '../repositories/chat-repo';
 import { createAgentLog, updateAgentDecision } from '../repositories/agent-log-repo';
+import { getIntelligenceMetrics } from '../repositories/intelligence-metrics-repo';
 import {
   countExercises,
   createCustomExercise,
@@ -47,8 +48,10 @@ describe('data layer (I-0.2)', () => {
       promptVersion: 'test-v1',
       validationResult: 'pass',
       providerId: 'apple-foundation-models',
+      providerKind: 'on_device',
       model: 'system-language-model-default',
       routeReason: '优先使用可用的设备端模型',
+      routeMode: 'single',
       fallbackHistory: [
         {
           providerId: 'apple-foundation-models',
@@ -62,20 +65,34 @@ describe('data layer (I-0.2)', () => {
       outputTokens: 80,
       toolRounds: 2,
       privacyClass: 'cloud_allowed',
+      estimatedCostUsdMicros: 2500,
+      degraded: false,
     });
     await updateAgentDecision(db, id, 'accept');
 
     const [row] = await db.select().from(agentLogs).where(eq(agentLogs.id, id));
     expect(row).toMatchObject({
       providerId: 'apple-foundation-models',
+      providerKind: 'on_device',
       model: 'system-language-model-default',
       inputTokens: 120,
       outputTokens: 80,
       toolRounds: 2,
       privacyClass: 'cloud_allowed',
+      routeMode: 'single',
+      estimatedCostUsdMicros: 2500,
       userDecision: 'accept',
     });
     expect(JSON.parse(row.fallbackHistoryJson!)).toHaveLength(1);
+    expect(await getIntelligenceMetrics(db, 0)).toEqual([
+      expect.objectContaining({
+        providerKind: 'on_device',
+        runs: 1,
+        passRate: 1,
+        estimatedCostUsd: 0.0025,
+        degradationRate: 0,
+      }),
+    ]);
   });
 
   it('device id is stable', async () => {

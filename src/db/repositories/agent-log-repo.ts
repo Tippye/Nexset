@@ -3,7 +3,9 @@ import { eq } from 'drizzle-orm';
 import { newId } from '@/lib/id';
 import type {
   IntelligencePrivacyClass,
+  IntelligenceProviderKind,
   IntelligenceRouteAttempt,
+  IntelligenceRouteMode,
 } from '@/intelligence/types';
 
 import { agentLogs } from '../schema';
@@ -22,13 +24,17 @@ export async function createAgentLog(
     validationResult: AgentValidationResult;
     latencyMs?: number;
     providerId?: string;
+    providerKind?: IntelligenceProviderKind;
     model?: string;
     routeReason?: string;
+    routeMode?: IntelligenceRouteMode;
     fallbackHistory?: IntelligenceRouteAttempt[];
     inputTokens?: number;
     outputTokens?: number;
     toolRounds?: number;
     privacyClass?: IntelligencePrivacyClass;
+    estimatedCostUsdMicros?: number;
+    degraded?: boolean;
     isBadcase?: boolean;
   },
 ): Promise<string> {
@@ -43,8 +49,10 @@ export async function createAgentLog(
     userDecision: null,
     latencyMs: input.latencyMs ?? null,
     providerId: input.providerId ?? null,
+    providerKind: input.providerKind ?? null,
     model: input.model ?? null,
     routeReason: input.routeReason ?? null,
+    routeMode: input.routeMode ?? null,
     fallbackHistoryJson: input.fallbackHistory?.length
       ? JSON.stringify(input.fallbackHistory)
       : null,
@@ -52,6 +60,8 @@ export async function createAgentLog(
     outputTokens: input.outputTokens ?? null,
     toolRounds: input.toolRounds ?? null,
     privacyClass: input.privacyClass ?? null,
+    estimatedCostUsdMicros: input.estimatedCostUsdMicros ?? 0,
+    degraded: input.degraded ?? false,
     isBadcase: input.isBadcase ?? false,
     createdAt: Date.now(),
   });
