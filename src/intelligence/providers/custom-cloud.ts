@@ -20,6 +20,10 @@ export function createCustomCloudProvider(
       tool_calling: config?.supportsTools !== false,
       streaming: true,
     },
+    pricing: {
+      inputPerMillionUsd: Math.max(0, config?.inputCostPerMillion ?? 0),
+      outputPerMillionUsd: Math.max(0, config?.outputCostPerMillion ?? 0),
+    },
     availability: async () => ({
       available: isAIConfigured(config),
       reason: isAIConfigured(config) ? '自定义云端模型已配置' : '尚未配置可用的自定义 LLM 服务',

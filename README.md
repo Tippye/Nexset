@@ -20,10 +20,13 @@ Nexset 是一个本地优先的 Expo / React Native 健身计划与训练记录�
 - 近 7 天偏差分析、计划差异预览，以及需要确认的每日调整建议。
 - 对话教练的本地意图路由、数据查询、动作要点和确认式记组。
 - OpenAI-compatible `/chat/completions` 与 Anthropic `/v1/messages` 自定义模型服务。
+- `llama.rn` 驱动的 GGUF 端侧模型，预设 MiniCPM5-1B 与 Qwen3.5-4B，并支持自定义量化文件路径。
+- 按端侧模型、云端模型与本地模板统计平均/P50/P95 延迟、通过率、估算成本和降级率。
+- 只读 MCP stdio 服务，可查询档案、当前计划、近期训练、模型指标和同步队列。
 - iOS 上优先尝试 Apple Intelligence，能力不可用或本地校验失败时按策略回退。
 - Apple Watch 手动记组与设备端自动计数 Beta、HealthKit、Widget、Live Activity、App Intents 和触感反馈。
 
-WebDAV 当前仅包含配置与连接检测基础设施，完整跨端同步仍在开发中，界面不会将其标记为已完成。
+WebDAV 当前包含配置/连接检测以及经过单元测试的操作队列、冲突决策、指数退避与幂等收件箱；远端日志文件协议和自动调度仍在开发中，界面不会将其标记为完整同步。
 
 ## 技术与隐私原则
 
@@ -55,7 +58,7 @@ npm run android
 
 ## AI 配置
 
-在「我的 → AI 设置」中填写：
+在「我的 → AI 设置」中可配置端侧 GGUF 模型和/或云端 API：
 
 1. OpenAI 兼容或 Anthropic 协议；
 2. HTTPS Base URL；
@@ -63,7 +66,20 @@ npm run android
 4. API Key；
 5. 点击「测试连接并检测能力」。
 
-OpenAI 兼容地址会自动追加 `/chat/completions`，Anthropic 地址会自动追加 `/messages`。生成计划时会优先尝试支持的设备端能力；只有任务策略允许且需要回退时，才会请求已配置的云端服务。
+端侧推荐从 [MiniCPM5-1B](https://modelscope.cn/models/OpenBMB/MiniCPM5-1B) 的 Q4_K_M GGUF 开始；内存充足的设备也可使用 [Qwen3.5-4B](https://modelscope.cn/models/Qwen/Qwen3.5-4B)。将下载后的 `file://...gguf` 路径填入设置。端侧推理依赖原生开发构建，不能在 Expo Go 或 Web 端运行。
+
+OpenAI 兼容地址会自动追加 `/chat/completions`，Anthropic 地址会自动追加 `/messages`。只有一个有效模型配置时启用单模型模式；同时配置端侧与云端模型时才启用端侧优先、云端降级的协同路由。确定性本地模板始终作为安全兜底。
+
+## MCP 服务
+
+MCP 服务以只读 stdio 方式访问已迁移的 Nexset SQLite 数据库，不提供写入工具：
+
+```bash
+npm run mcp:typecheck
+NEXSET_DB_PATH=/absolute/path/to/nexset.db npm run mcp:start
+```
+
+也可以使用 `npm run mcp:start -- --db /absolute/path/to/nexset.db`。可用工具为 `get_profile`、`get_active_plan`、`list_recent_workouts`、`get_intelligence_metrics` 和 `get_sync_status`。服务使用 stderr 报错，不会污染 MCP stdio 协议输出。
 
 ## 开发检查
 
@@ -87,12 +103,13 @@ npm run eval:intent
 src/app/                 Expo Router 页面
 src/ai/                  AI 配置、Runtime 与计划/调整 Agent
 src/intelligence/        平台无关能力契约、路由与 Provider
+mcp-server/              只读 SQLite MCP stdio 服务
 src/components/          可复用界面组件
 src/data/                内置动作库与器械映射
 src/db/                  SQLite Schema、迁移与 repositories
 src/lib/                 计划 Schema、模板、营养公式与硬校验
 src/store/               Zustand 应用状态
-src/sync/                WebDAV 配置、地址与错误处理
+src/sync/                WebDAV 配置、离线队列、冲突与幂等处理
 src/platform/apple/      HealthKit、Watch、实时活动与系统桥接
 widgets/                 主屏组件、锁屏实时活动与灵动岛布局
 targets/watch/           Apple Watch SwiftUI 应用

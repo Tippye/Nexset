@@ -6,6 +6,9 @@ export type AIConfig = {
   model: string;
   apiKey: string;
   supportsTools: boolean | null;
+  /** Optional prices used only for local cost estimation. */
+  inputCostPerMillion?: number;
+  outputCostPerMillion?: number;
 };
 
 export type AIToolCall = {

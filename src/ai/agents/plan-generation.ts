@@ -35,7 +35,14 @@ import {
   createDefaultIntelligenceRouter,
   defaultIntelligencePolicy,
 } from '@/intelligence/default-router';
+import { loadLocalModelConfig } from '@/intelligence/local-model-config';
+import { estimateCostUsdMicros, executionWasDegraded } from '@/intelligence/metrics';
 import { IntelligenceRoutingError, type IntelligenceRouter } from '@/intelligence/router';
+import type {
+  IntelligenceProviderSession,
+  IntelligenceRouteAttempt,
+  IntelligenceRouteMode,
+} from '@/intelligence/types';
 
 export const PLAN_AGENT_PROMPT_VERSION = 'plan-generation-v1';
 export const PLAN_CONVERSATION_PROMPT_VERSION = 'plan-generation-conversation-v1';
@@ -95,6 +102,7 @@ export async function generatePlanProposal(
     onProgress?: (message: string) => void;
   } = {},
 ): Promise<GeneratedPlanProposal> {
+  const startedAt = Date.now();
   const context = await preparePlanGenerationContext();
   const { db, profile, exerciseMap, forbidden, available, trainingSummary, baseline } = context;
 
@@ -115,9 +123,14 @@ export async function generatePlanProposal(
     exercise_library_summary: available.map(compactExercise),
   };
   const policy = defaultIntelligencePolicy('plan_generation');
+  const localModelConfig = options.router ? null : await loadLocalModelConfig();
   const router =
     options.router ??
-    createDefaultIntelligenceRouter(config, { cloudComplete: options.complete });
+    createDefaultIntelligenceRouter(config, {
+      cloudComplete: options.complete,
+      localModelConfig,
+    });
+  let completedAttempts: IntelligenceRouteAttempt[] = [];
 
   try {
     const routed = await router.execute(policy, (provider) =>
@@ -131,6 +144,7 @@ export async function generatePlanProposal(
         },
       ),
     );
+    completedAttempts = routed.attempts;
     const result = routed.result;
     const hard = validateAiPlan(result.data, profile, exerciseMap, forbidden, baseline.tdee);
     if (!hard.success) throw new Error(hard.errors.join('；'));
@@ -155,13 +169,17 @@ export async function generatePlanProposal(
       validationResult: result.validationRetries ? 'retry_pass' : 'pass',
       latencyMs: result.latencyMs,
       providerId: routed.provider.id,
+      providerKind: routed.provider.kind,
       model: routed.provider.model,
       routeReason: routed.routeReason,
+      routeMode: routed.routeMode,
       fallbackHistory: routed.attempts,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       toolRounds: result.rounds,
       privacyClass: policy.privacyClass,
+      estimatedCostUsdMicros: estimateCostUsdMicros(result.usage, routed.provider.pricing),
+      degraded: executionWasDegraded(routed),
     });
     return {
       plan: validated.plan,
@@ -174,8 +192,15 @@ export async function generatePlanProposal(
     };
   } catch (error) {
     const reason = humanizeGenerationError(error);
-    const attempts = error instanceof IntelligenceRoutingError ? error.attempts : [];
-    await createAgentLog(db, {
+    const attempts =
+      error instanceof IntelligenceRoutingError ? error.attempts : completedAttempts;
+    const fallback = templateFallback(
+      profile,
+      exerciseMap,
+      forbidden,
+      `AI 计划未能通过完整校验（${reason}），已安全降级为本地模板。`,
+    );
+    const logId = await createAgentLog(db, {
       agent: 'PlanGenerationAgent',
       promptVersion: PLAN_AGENT_PROMPT_VERSION,
       inputSummary: JSON.stringify({
@@ -184,33 +209,46 @@ export async function generatePlanProposal(
         request,
       }),
       output: { error: reason },
-      validationResult: 'fail',
-      isBadcase: true,
+      validationResult: 'pass',
+      latencyMs: Date.now() - startedAt,
+      providerId: 'local-template',
+      providerKind: 'template',
+      model: 'deterministic-plan-template-v1',
+      routeMode: 'template',
+      degraded: true,
       routeReason: '所有模型 Provider 均不可用或执行失败，回退本地模板',
       fallbackHistory: attempts,
       privacyClass: policy.privacyClass,
     });
-    return templateFallback(
-      profile,
-      exerciseMap,
-      forbidden,
-      `AI 计划未能通过完整校验（${reason}），已安全降级为本地模板。`,
-    );
+    return { ...fallback, logId };
   }
 }
 
 export async function generateTraditionalPlanProposal(): Promise<GeneratedPlanProposal> {
+  const started = Date.now();
   const { profile, exerciseMap, forbidden } = await preparePlanGenerationContext();
   const generated = generateTemplatePlan(profile, exerciseMap, forbidden);
   if (!generated.ok) {
     throw new Error(generated.errors.join('；') || '本地模板未能生成可用计划');
   }
+  const logId = await createAgentLog(getDb(), {
+    agent: 'PlanGenerationAgent',
+    promptVersion: PLAN_AGENT_PROMPT_VERSION,
+    validationResult: 'pass',
+    latencyMs: Date.now() - started,
+    providerId: 'local-template',
+    providerKind: 'template',
+    model: 'deterministic-plan-template-v1',
+    routeReason: '用户选择传统本地生成',
+    routeMode: 'template',
+  });
   return {
     plan: generated.plan,
     warnings: generated.warnings,
     source: 'template',
     providerId: 'local-template',
     routeReason: '用户选择传统本地生成',
+    logId,
   };
 }
 
@@ -243,9 +281,16 @@ export async function generateInteractivePlanTurn(
     clarification_history: history,
   };
   const policy = defaultIntelligencePolicy('plan_generation');
+  const localModelConfig = options.router ? null : await loadLocalModelConfig();
   const router =
     options.router ??
-    createDefaultIntelligenceRouter(config, { cloudComplete: options.complete });
+    createDefaultIntelligenceRouter(config, {
+      cloudComplete: options.complete,
+      localModelConfig,
+    });
+  let completedAttempts: IntelligenceRouteAttempt[] = [];
+  let completedProvider: IntelligenceProviderSession | undefined;
+  let completedRouteMode: IntelligenceRouteMode = 'single';
 
   try {
     const routed = await router.execute(policy, (provider) =>
@@ -259,6 +304,9 @@ export async function generateInteractivePlanTurn(
         },
       ),
     );
+    completedAttempts = routed.attempts;
+    completedProvider = routed.provider;
+    completedRouteMode = routed.routeMode;
     const result = routed.result;
     if (result.data.kind === 'question') {
       return {
@@ -297,13 +345,17 @@ export async function generateInteractivePlanTurn(
       validationResult: result.validationRetries ? 'retry_pass' : 'pass',
       latencyMs: result.latencyMs,
       providerId: routed.provider.id,
+      providerKind: routed.provider.kind,
       model: routed.provider.model,
       routeReason: routed.routeReason,
+      routeMode: routed.routeMode,
       fallbackHistory: routed.attempts,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       toolRounds: result.rounds,
       privacyClass: policy.privacyClass,
+      estimatedCostUsdMicros: estimateCostUsdMicros(result.usage, routed.provider.pricing),
+      degraded: executionWasDegraded(routed),
     });
     return {
       kind: 'plan',
@@ -320,7 +372,9 @@ export async function generateInteractivePlanTurn(
     };
   } catch (error) {
     const reason = humanizeGenerationError(error);
-    const attempts = error instanceof IntelligenceRoutingError ? error.attempts : [];
+    const attempts =
+      error instanceof IntelligenceRoutingError ? error.attempts : completedAttempts;
+    const lastAttempt = attempts.at(-1);
     await createAgentLog(db, {
       agent: 'InteractivePlanGenerationAgent',
       promptVersion: PLAN_CONVERSATION_PROMPT_VERSION,
@@ -332,8 +386,14 @@ export async function generateInteractivePlanTurn(
       }),
       output: { error: reason },
       validationResult: 'fail',
+      providerId: completedProvider?.id ?? lastAttempt?.providerId,
+      providerKind: completedProvider?.kind ?? lastAttempt?.providerKind,
+      model: completedProvider?.model ?? lastAttempt?.model,
       isBadcase: true,
       routeReason: 'AI 交互式计划生成失败，不自动降级本地模板',
+      routeMode:
+        error instanceof IntelligenceRoutingError ? error.routeMode : completedRouteMode,
+      degraded: true,
       fallbackHistory: attempts,
       privacyClass: policy.privacyClass,
     });

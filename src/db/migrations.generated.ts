@@ -54,5 +54,19 @@ export const MIGRATIONS: Migration[] = [
       "ALTER TABLE `agent_logs` ADD `tool_rounds` integer;",
       "ALTER TABLE `agent_logs` ADD `privacy_class` text;"
     ]
+  },
+  {
+    "name": "0003_slippery_silver_centurion",
+    "statements": [
+      "CREATE TABLE `sync_inbox` (\n\t`op_id` text PRIMARY KEY NOT NULL,\n\t`device_id` text NOT NULL,\n\t`table_name` text NOT NULL,\n\t`row_id` text NOT NULL,\n\t`op` text NOT NULL,\n\t`payload_json` text,\n\t`ts` integer NOT NULL,\n\t`applied_at` integer NOT NULL\n);",
+      "CREATE INDEX `idx_sync_inbox_row` ON `sync_inbox` (`table_name`,`row_id`);",
+      "ALTER TABLE `agent_logs` ADD `provider_kind` text;",
+      "ALTER TABLE `agent_logs` ADD `route_mode` text;",
+      "ALTER TABLE `agent_logs` ADD `estimated_cost_usd_micros` integer DEFAULT 0 NOT NULL;",
+      "ALTER TABLE `agent_logs` ADD `degraded` integer DEFAULT false NOT NULL;",
+      "ALTER TABLE `sync_oplog` ADD `attempt_count` integer DEFAULT 0 NOT NULL;",
+      "ALTER TABLE `sync_oplog` ADD `next_attempt_at` integer DEFAULT 0 NOT NULL;",
+      "ALTER TABLE `sync_oplog` ADD `last_error` text;"
+    ]
   }
 ];

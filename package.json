@@ -12,11 +12,13 @@
     "@expo/ui": "~57.0.7",
     "@expo/vector-icons": "^15.0.2",
     "@kingstinct/react-native-healthkit": "^14.0.2",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@plevo/expo-watch-connectivity": "^0.1.1",
     "@react-navigation/bottom-tabs": "^7.18.14",
     "drizzle-orm": "^0.45.2",
     "expo": "~57.0.8",
     "expo-audio": "~57.0.3",
+    "expo-build-properties": "~57.0.8",
     "expo-constants": "~57.0.7",
     "expo-device": "~57.0.1",
     "expo-font": "~57.0.1",
@@ -35,6 +37,7 @@
     "expo-system-ui": "~57.0.1",
     "expo-web-browser": "~57.0.2",
     "expo-widgets": "~57.0.6",
+    "llama.rn": "^0.12.8",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
@@ -53,6 +56,7 @@
     "@bacons/apple-targets": "^5.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jest": "^29.5.14",
+    "@types/node": "^26.1.2",
     "@types/react": "~19.2.2",
     "better-sqlite3": "^13.0.1",
     "drizzle-kit": "^0.31.10",
@@ -73,9 +77,11 @@
     "test": "jest --watchman=false",
     "test:ci": "jest --runInBand --watchman=false",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run lint && npm run test:ci",
+    "check": "npm run typecheck && npm run mcp:typecheck && npm run lint && npm run test:ci",
     "eval:plan": "tsx eval/plan-eval.ts",
     "eval:adjust": "tsx eval/adjust-eval.ts",
-    "eval:intent": "tsx eval/intent-eval.ts"
+    "eval:intent": "tsx eval/intent-eval.ts",
+    "mcp:start": "tsx mcp-server/index.ts",
+    "mcp:typecheck": "tsc -p mcp-server/tsconfig.json"
   }
 }

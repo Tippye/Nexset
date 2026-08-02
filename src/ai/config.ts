@@ -25,6 +25,8 @@ export function defaultAIConfig(protocol: AIProtocol = 'openai'): AIConfig {
     model: '',
     apiKey: '',
     supportsTools: null,
+    inputCostPerMillion: 0,
+    outputCostPerMillion: 0,
   };
 }
 

@@ -216,8 +216,27 @@ export const syncOplog = sqliteTable(
     payloadJson: text('payload_json'),
     ts: integer('ts').notNull(),
     synced: integer('synced', { mode: 'boolean' }).notNull().default(false),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at').notNull().default(0),
+    lastError: text('last_error'),
   },
   (t) => [index('idx_oplog_synced').on(t.synced)],
+);
+
+/** Inbound operation receipts make WebDAV downloads idempotent. */
+export const syncInbox = sqliteTable(
+  'sync_inbox',
+  {
+    opId: text('op_id').primaryKey(),
+    deviceId: text('device_id').notNull(),
+    tableName: text('table_name').notNull(),
+    rowId: text('row_id').notNull(),
+    op: text('op').notNull(),
+    payloadJson: text('payload_json'),
+    ts: integer('ts').notNull(),
+    appliedAt: integer('applied_at').notNull(),
+  },
+  (t) => [index('idx_sync_inbox_row').on(t.tableName, t.rowId)],
 );
 
 export const agentLogs = sqliteTable(
@@ -232,13 +251,17 @@ export const agentLogs = sqliteTable(
     userDecision: text('user_decision'), // 'accept'|'partial'|'reject'|null
     latencyMs: integer('latency_ms'),
     providerId: text('provider_id'),
+    providerKind: text('provider_kind'),
     model: text('model'),
     routeReason: text('route_reason'),
+    routeMode: text('route_mode'),
     fallbackHistoryJson: text('fallback_history_json'),
     inputTokens: integer('input_tokens'),
     outputTokens: integer('output_tokens'),
     toolRounds: integer('tool_rounds'),
     privacyClass: text('privacy_class'), // 'local_only'|'cloud_allowed'
+    estimatedCostUsdMicros: integer('estimated_cost_usd_micros').notNull().default(0),
+    degraded: integer('degraded', { mode: 'boolean' }).notNull().default(false),
     isBadcase: integer('is_badcase', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at').notNull(),
   },

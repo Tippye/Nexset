@@ -4,11 +4,15 @@ import type {
   IntelligenceProvider,
   IntelligenceProviderSession,
   IntelligenceRouteAttempt,
+  IntelligenceRouteMode,
   IntelligenceStatus,
 } from './types';
 
 export class IntelligenceRoutingError extends Error {
-  constructor(public readonly attempts: IntelligenceRouteAttempt[]) {
+  constructor(
+    public readonly attempts: IntelligenceRouteAttempt[],
+    public readonly routeMode: IntelligenceRouteMode = 'single',
+  ) {
     super(
       attempts.length
         ? attempts.map((attempt) => `${attempt.providerId}: ${attempt.reason}`).join('；')
@@ -20,9 +24,11 @@ export class IntelligenceRoutingError extends Error {
 
 export class IntelligenceRouter {
   private readonly providers: IntelligenceProvider[];
+  private readonly routeMode: IntelligenceRouteMode;
 
-  constructor(providers: IntelligenceProvider[]) {
+  constructor(providers: IntelligenceProvider[], routeMode?: IntelligenceRouteMode) {
     this.providers = [...providers].sort((a, b) => a.priority - b.priority);
+    this.routeMode = routeMode ?? (providers.length > 1 ? 'cascade' : 'single');
   }
 
   async inspect(policy: IntelligencePolicy): Promise<IntelligenceStatus> {
@@ -33,6 +39,7 @@ export class IntelligenceRouter {
         available: false,
         reason: attempts.at(-1)?.reason ?? '当前没有可用的智能服务',
         attempts,
+        routeMode: this.routeMode,
       };
     }
     return {
@@ -40,8 +47,9 @@ export class IntelligenceRouter {
       providerId: provider.id,
       providerName: provider.displayName,
       model: provider.model,
-      reason: routeReason(provider, attempts),
+      reason: routeReason(provider, attempts, this.routeMode),
       attempts,
+      routeMode: this.routeMode,
     };
   }
 
@@ -69,7 +77,8 @@ export class IntelligenceRouter {
           result,
           provider: session,
           attempts: completedAttempts,
-          routeReason: routeReason(provider, completedAttempts),
+          routeReason: routeReason(provider, completedAttempts, this.routeMode),
+          routeMode: this.routeMode,
         };
       } catch (error) {
         attempts.push({
@@ -82,7 +91,7 @@ export class IntelligenceRouter {
       }
     }
 
-    throw new IntelligenceRoutingError(attempts);
+    throw new IntelligenceRoutingError(attempts, this.routeMode);
   }
 
   private async resolveCandidates(policy: IntelligencePolicy): Promise<{
@@ -159,6 +168,7 @@ function toSession(provider: IntelligenceProvider): IntelligenceProviderSession 
     kind: provider.kind,
     model: provider.model,
     capabilities: provider.capabilities,
+    pricing: provider.pricing,
     complete: provider.complete,
   };
 }
@@ -166,7 +176,14 @@ function toSession(provider: IntelligenceProvider): IntelligenceProviderSession 
 function routeReason(
   provider: IntelligenceProvider,
   attempts: IntelligenceRouteAttempt[],
+  routeMode: IntelligenceRouteMode,
 ): string {
+  if (routeMode === 'single') {
+    return provider.kind === 'cloud'
+      ? '单模型模式：统一使用已配置的云端模型'
+      : '单模型模式：统一使用已配置的设备端模型';
+  }
+  if (routeMode === 'system') return '使用系统提供的设备端模型能力';
   if (provider.kind === 'on_device') return '优先使用可用的设备端模型';
   const onDeviceAttempt = attempts.find(
     (attempt) => attempt.providerKind === 'on_device' && attempt.status !== 'success',
